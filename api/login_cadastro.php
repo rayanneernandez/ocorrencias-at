@@ -123,57 +123,122 @@ if (isset($_POST['acao'])) {
         ?>
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* Estilos específicos para mobile */
+        @media (max-width: 640px) {
+            body {
+                background-color: #f9fafb;
+            }
+            .card-container {
+                padding: 0;
+            }
+            .login-card {
+                border-radius: 2rem 2rem 0 0;
+                margin-top: auto;
+                box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.1);
+            }
+            input, select {
+                font-size: 16px !important; /* Evita zoom em iOS */
+            }
+            .btn-submit {
+                position: sticky;
+                bottom: 0;
+                margin-top: 2rem;
+            }
+        }
+
+        /* Animações suaves */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Melhorias visuais */
+        input::placeholder, select::placeholder {
+            color: #9ca3af;
+        }
+        input:focus, select:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
+        }
     </style>
 </head>
-<body class="min-h-screen flex flex-col items-center justify-center bg-white text-gray-900">
+<body class="min-h-screen flex flex-col bg-white text-gray-900">
 
 <!-- Botão Voltar -->
-<div class="mb-4 self-start w-full max-w-md px-6">
-    <a href="principal.php" class="inline-block px-3 py-1 border border-green-500 text-green-500 rounded-md hover:bg-green-500 hover:text-white transition">← Voltar</a>
+<div class="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-sm z-10 p-4">
+    <div class="max-w-md mx-auto">
+        <a href="principal.php" class="inline-block px-3 py-1 border border-green-500 text-green-500 rounded-md hover:bg-green-500 hover:text-white transition">← Voltar</a>
+    </div>
 </div>
 
-<div class="w-full max-w-md">
-    <!-- Logo -->
-    <div class="flex items-center justify-center mb-4 space-x-3">
-        <div class="bg-green-500 p-2 rounded-xl">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7h16c-4.418 0-8-3.134-8-7z"/>
-            </svg>
+<div class="flex-1 flex flex-col items-center justify-center px-4 pt-16 pb-8">
+    <div class="w-full max-w-md">
+        <!-- Logo -->
+        <div class="flex items-center justify-center mb-6 space-x-3">
+            <div class="bg-green-500 p-3 rounded-xl">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7h16c-4.418 0-8-3.134-8-7z"/>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold">RADCI</h1>
+                <p class="text-gray-500">Cidade Mais Inteligente</p>
+            </div>
         </div>
-        <div>
-            <h1 class="text-xl font-bold">RADCI</h1>
-            <p class="text-gray-500 text-sm">Cidade Mais Inteligente</p>
-        </div>
-    </div>
 
-    <!-- Card -->
-    <div class="bg-gray-50 rounded-xl shadow-lg p-6 max-h-[75vh] overflow-y-auto hide-scrollbar relative">
-        <!-- Tabs -->
-        <div class="flex mb-6 border-b border-gray-300">
-            <button id="tabBtnLogin" onclick="switchTab('login')" class="flex-1 py-2 font-semibold text-gray-500 border-b-2 border-transparent">Entrar</button>
-            <button id="tabBtnCadastro" onclick="switchTab('cadastro')" class="flex-1 py-2 font-semibold border-b-2 border-green-500 text-green-600">Cadastrar</button>
-        </div>
+        <!-- Card -->
+        <div class="bg-gray-50 rounded-2xl shadow-lg p-6 sm:p-8 max-h-[75vh] overflow-y-auto hide-scrollbar relative">
+            <!-- Tabs -->
+            <div class="flex mb-8 border-b border-gray-300">
+                <button id="tabBtnLogin" onclick="switchTab('login')" class="flex-1 py-3 font-semibold text-gray-500 border-b-2 border-transparent">Entrar</button>
+                <button id="tabBtnCadastro" onclick="switchTab('cadastro')" class="flex-1 py-3 font-semibold border-b-2 border-green-500 text-green-600">Cadastrar</button>
+            </div>
 
         <!-- Login -->
         <div id="tabLogin" style="display:none;">
             <?php if($erroLogin) echo "<p class='text-red-500 mb-2'>$erroLogin</p>"; ?>
-            <form method="POST" class="space-y-4">
+            <form method="POST" class="space-y-6">
                 <input type="hidden" name="acao" value="login">
                 <div>
-                    <label class="text-sm mb-1 block">E-mail</label>
-                    <input type="email" name="login_email" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500">
+                    <label class="text-sm font-medium mb-2 block text-gray-700">E-mail</label>
+                    <input type="email" name="login_email" required 
+                           class="w-full p-4 rounded-lg bg-white border border-gray-300 
+                                  focus:border-green-500 focus:ring-2 focus:ring-green-200 
+                                  text-base transition-colors"
+                           placeholder="Digite seu e-mail">
                 </div>
                 <div>
-                    <label class="text-sm mb-1 block">Senha</label>
+                    <label class="text-sm font-medium mb-2 block text-gray-700">Senha</label>
                     <div class="relative">
-                        <input type="password" id="loginSenha" name="login_senha" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500 pr-10">
-                        <button type="button" onclick="togglePassword('loginSenha')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">👁</button>
+                        <input type="password" id="loginSenha" name="login_senha" required 
+                               class="w-full p-4 rounded-lg bg-white border border-gray-300 
+                                      focus:border-green-500 focus:ring-2 focus:ring-green-200 
+                                      text-base transition-colors pr-12"
+                               placeholder="Digite sua senha">
+                        <button type="button" onclick="togglePassword('loginSenha')" 
+                                class="absolute right-4 top-1/2 -translate-y-1/2 
+                                       text-gray-400 hover:text-gray-700 p-2">
+                            👁
+                        </button>
                     </div>
                 </div>
                 <div class="flex justify-end text-sm">
-                    <a href="esqueceu_senha.php" class="text-green-500 hover:underline">Esqueceu sua senha?</a>
+                    <a href="esqueceu_senha.php" 
+                       class="text-green-600 hover:text-green-700 font-medium 
+                              hover:underline transition-colors">
+                        Esqueceu sua senha?
+                    </a>
                 </div>
-                <button type="submit" class="w-full bg-green-500 text-white py-3 rounded-md font-semibold">Entrar</button>
+                <button type="submit" 
+                        class="w-full bg-green-500 text-white py-4 rounded-lg 
+                               font-semibold text-lg hover:bg-green-600 
+                               transition-colors shadow-sm hover:shadow">
+                    Entrar
+                </button>
             </form>
         </div>
 
@@ -181,12 +246,15 @@ if (isset($_POST['acao'])) {
         <div id="tabCadastro" style="display:none;">
             <?php if($erroCadastro) echo "<p class='text-red-500 mb-2'>$erroCadastro</p>"; ?>
             <?php if($sucessoCadastro) echo "<p class='text-green-500 mb-2'>$sucessoCadastro</p>"; ?>
-            <form method="POST" class="space-y-4" id="formCadastro">
+            <form method="POST" class="space-y-6" id="formCadastro">
                 <input type="hidden" name="acao" value="cadastro">
 
                 <div>
-                    <label class="text-sm mb-1 block">Perfil *</label>
-                    <select name="perfil" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500">
+                    <label class="text-sm font-medium mb-2 block text-gray-700">Perfil *</label>
+                    <select name="perfil" required 
+                            class="w-full p-4 rounded-lg bg-white border border-gray-300 
+                                   focus:border-green-500 focus:ring-2 focus:ring-green-200 
+                                   text-base transition-colors appearance-none">
                         <option value="">Selecione seu perfil</option>
                         <option value="cidadao">Cidadão</option>
                         <option value="admin_publico">Administrador Público</option>
@@ -194,8 +262,12 @@ if (isset($_POST['acao'])) {
                 </div>
 
                 <div>
-                    <label class="text-sm mb-1 block">Nome Completo *</label>
-                    <input type="text" name="nome_completo" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500">
+                    <label class="text-sm font-medium mb-2 block text-gray-700">Nome Completo *</label>
+                    <input type="text" name="nome_completo" required 
+                           placeholder="Digite seu nome completo"
+                           class="w-full p-4 rounded-lg bg-white border border-gray-300 
+                                  focus:border-green-500 focus:ring-2 focus:ring-green-200 
+                                  text-base transition-colors">
                 </div>
 
                 <div>

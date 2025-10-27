@@ -8,3 +8,20 @@ php_value max_file_uploads 50
 
 # Configurações de segurança
 Options -Indexes
+
+# Habilitar o módulo de reescrita
+RewriteEngine On
+
+# Não aplicar regras para arquivos e diretórios existentes
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Redirecionar a raiz para api/index.php
+RewriteRule ^$ api/index.php [L]
+
+# Redirecionar arquivos PHP para a pasta api, exceto os que já estão na pasta api
+RewriteCond %{REQUEST_URI} !^/radci/api/
+RewriteRule ^(.+)\.php$ api/$1.php [L]
+
+# Permitir acesso direto aos arquivos nas pastas assets e uploads
+RewriteRule ^(assets|uploads)/ - [L]

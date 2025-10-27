@@ -16,11 +16,11 @@
       "dest": "/uploads/$1"
     },
     {
-      "src": "/(.*)\\.php$",
+      "src": "^/(?!api/)(.+)\\.php$",
       "dest": "/api/$1.php"
     },
     {
-      "src": "/",
+      "src": "^/$",
       "dest": "/api/index.php"
     }
   ],

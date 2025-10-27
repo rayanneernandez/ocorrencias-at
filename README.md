@@ -53,43 +53,7 @@ DB_PASS=sua_senha
 DB_NAME=nome_do_banco
 ```
 
-## 📁 Estrutura do Projeto
 
-```
-radci/
-├── api/                    # APIs e endpoints
-│   ├── geocode.php         # API de geocodificação
-│   ├── reverse.php         # API de geocodificação reversa
-│   └── viacep.php          # Integração com ViaCEP
-├── assets/                 # Recursos estáticos
-│   ├── css/                # Arquivos CSS
-│   ├── js/                 # Arquivos JavaScript
-│   └── images/             # Imagens do projeto
-├── includes/               # Arquivos de inclusão
-│   ├── db.php              # Configuração do banco de dados
-│   └── mobile_nav.php      # Navegação mobile
-├── pages/                  # Páginas da aplicação
-│   ├── dashboard.php       # Dashboard principal
-│   ├── login_cadastro.php  # Sistema de login e cadastro
-│   ├── registrar_ocorrencia.php # Registro de ocorrências
-│   ├── relatorios.php      # Sistema de relatórios
-│   ├── usuarios.php        # Gerenciamento de usuários
-│   ├── minha_conta.php     # Perfil do usuário
-│   ├── minhas_ocorrencias.php # Ocorrências do usuário
-│   ├── prioridades.php     # Definição de prioridades
-│   ├── criar_pesquisa.php  # Criação de pesquisas
-│   ├── pesquisas_respondidas.php # Pesquisas respondidas
-│   ├── esqueceu_senha.php  # Recuperação de senha
-│   ├── confirmar_reset_senha.php # Confirmação de reset
-│   ├── solicitar_reset_senha.php # Solicitação de reset
-│   └── salvar_preferencias.php # Salvar preferências
-├── uploads/                # Diretório para uploads
-│   ├── temp/               # Arquivos temporários
-│   └── surveys/            # Arquivos de pesquisas
-├── index.php               # Página inicial
-├── db_inspect.php          # Inspeção do banco de dados
-└── vercel.json            # Configuração do Vercel
-```
 
 ## 🔧 Configuração Local
 

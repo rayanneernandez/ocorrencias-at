@@ -18,20 +18,33 @@ function get_pdo() {
         $pass = '';
         $db   = 'radci';
     } else {
-        $host = $_ENV['DB_HOST'] ?? 'localhost';
-        $user = $_ENV['DB_USER'] ?? '';
-        $pass = $_ENV['DB_PASS'] ?? '';
-        $db   = $_ENV['DB_NAME'] ?? '';
+        $host = getenv('DB_HOST') ?: $_ENV['DB_HOST'] ?? 'localhost';
+        $user = getenv('DB_USER') ?: $_ENV['DB_USER'] ?? '';
+        $pass = getenv('DB_PASS') ?: $_ENV['DB_PASS'] ?? '';
+        $db   = getenv('DB_NAME') ?: $_ENV['DB_NAME'] ?? '';
+
+        error_log("DB Connection Info - Host: $host, User: $user, Database: $db");
+        
+        if (empty($host) || empty($user) || empty($db)) {
+            error_log('Database environment variables not properly configured');
+            die('Erro: Configuração do banco de dados incompleta');
+        }
     }
 
     try {
-        $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8mb4", $user, $pass, [
+        $dsn = "mysql:host=$host;dbname=$db;charset=utf8mb4";
+        error_log("Attempting database connection: $dsn");
+        
+        $pdo = new PDO($dsn, $user, $pass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
         ]);
+        
+        error_log("Database connection established successfully");
         return $pdo;
     } catch (PDOException $e) {
-        die("Erro na conexão com '$db': " . $e->getMessage());
+        error_log("Database connection error: " . $e->getMessage());
+        die("Erro na conexão com o banco de dados: " . $e->getMessage());
     }
 }
