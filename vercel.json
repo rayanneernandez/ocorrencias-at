@@ -1,13 +1,17 @@
 {
-"functions": {
-  "api/**/*.php": {
-    "runtime": "vercel-php@latest"
-  }
-}
-,
+  "version": 2,
+  "functions": {
+    "api/**/*.php": {
+      "runtime": "@vercel-community/php@latest"
+    },
+    "index.php": {
+      "runtime": "@vercel-community/php@latest"
+    }
+  },
   "routes": [
     {
       "src": "/assets/(.*)",
+      "headers": { "Cache-Control": "public, max-age=31536000, immutable" },
       "dest": "/assets/$1"
     },
     {
@@ -20,11 +24,18 @@
     },
     {
       "src": "/",
-      "dest": "/api/dashboard.php"
+      "dest": "/index.php"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.php"
     }
   ],
   "env": {
     "PHP_VERSION": "8.1"
   },
-  "regions": ["gru1"]
+  "regions": ["gru1"],
+  "github": {
+    "enabled": false
+  }
 }
