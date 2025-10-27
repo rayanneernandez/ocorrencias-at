@@ -6,10 +6,7 @@ ini_set('display_errors', 1);
 
 session_start();
 
-// Exibe sessão para debug
-echo "<pre>";
-print_r($_SESSION);
-echo "</pre>";
+// Código de debug removido para evitar o erro "headers already sent"
 
 if (isset($_SESSION['usuario_id']) && $_SESSION['usuario_id'] > 0) {
     $perfil = $_SESSION['usuario_perfil'] ?? 1;

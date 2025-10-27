@@ -901,7 +901,7 @@ foreach ($ocorrencias as $o) {
   
     <div class="relative">
       <button type="button" id="catPrev"
-              class="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white hidden"
+              class="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white"
               aria-label="Anterior">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
@@ -912,9 +912,9 @@ foreach ($ocorrencias as $o) {
            class="flex gap-4 overflow-x-auto hide-scrollbar snap-x snap-mandatory scroll-smooth pb-3 px-8">
         <?php foreach($categories as $cat): ?>
         <form method="GET" action="registrar_ocorrencia.php"
-              class="flex flex-col items-center snap-start flex-shrink-0 min-w-[100px]">
+              class="flex-shrink-0 w-[120px]">
           <input type="hidden" name="categoryId" value="<?= htmlspecialchars($cat['id']) ?>">
-          <button type="submit" class="flex flex-col items-center group cursor-pointer hover:bg-gray-50 rounded-lg p-2 transition-all duration-200">
+          <button type="submit" class="flex flex-col items-center group cursor-pointer hover:bg-gray-50 rounded-lg p-2 transition-all duration-200 w-full">
             <div class="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mb-2 group-hover:shadow-lg group-hover:scale-105 transition-all duration-200">
               <?= $cat['icon'] ?>
             </div>
@@ -924,31 +924,48 @@ foreach ($ocorrencias as $o) {
           </button>
         </form>
         <?php endforeach; ?>
-        
-        <!-- Botão + para registrar sem categoria específica -->
-        <form method="GET" action="registrar_ocorrencia.php"
-              class="flex flex-col items-center snap-start flex-shrink-0 min-w-[100px]">
-          <button type="submit" class="flex flex-col items-center group cursor-pointer hover:bg-gray-50 rounded-lg p-2 transition-all duration-200">
-            <div class="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-2 group-hover:shadow-lg group-hover:scale-105 transition-all duration-200 border-2 border-dashed border-green-300">
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14"/>
-              </svg>
-            </div>
-            <span class="text-xs text-center text-gray-700 leading-tight group-hover:text-gray-900 font-medium">
-              Outros
-            </span>
-          </button>
-        </form>
       </div>
   
       <button type="button" id="catNext"
-              class="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white hidden"
+              class="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white"
               aria-label="Próximo">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
         </svg>
       </button>
     </div>
+    
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const scroller = document.getElementById('catScroller');
+      const prevBtn = document.getElementById('catPrev');
+      const nextBtn = document.getElementById('catNext');
+      
+      // Função para verificar se precisa mostrar os botões
+      function checkScrollButtons() {
+        prevBtn.style.display = scroller.scrollLeft > 0 ? 'block' : 'none';
+        nextBtn.style.display = (scroller.scrollLeft + scroller.clientWidth) < scroller.scrollWidth ? 'block' : 'none';
+      }
+      
+      // Evento de scroll
+      scroller.addEventListener('scroll', checkScrollButtons);
+      
+      // Evento de resize
+      window.addEventListener('resize', checkScrollButtons);
+      
+      // Botões de navegação
+      prevBtn.addEventListener('click', () => {
+        scroller.scrollBy({ left: -240, behavior: 'smooth' });
+      });
+      
+      nextBtn.addEventListener('click', () => {
+        scroller.scrollBy({ left: 240, behavior: 'smooth' });
+      });
+      
+      // Verificação inicial
+      checkScrollButtons();
+    });
+    </script>
   </section>
 
 

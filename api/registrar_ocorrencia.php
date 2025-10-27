@@ -1063,6 +1063,45 @@ document.addEventListener('DOMContentLoaded', () => {
   // Inicialização do mapa e localização
   (async function init() {
     try {
+      // Verifica se tem categoria na URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const categoryId = urlParams.get('categoryId');
+      
+      // Se não tem categoria e não está no seletor, mostra o seletor
+      if (!categoryId && !document.getElementById('categorySelector')) {
+        const categories = [
+          {id: 'saude', name: 'Saúde'},
+          {id: 'inovacao', name: 'Inovação'},
+          {id: 'mobilidade', name: 'Mobilidade'},
+          {id: 'politicas', name: 'Políticas Públicas'},
+          {id: 'riscos', name: 'Riscos Urbanos'},
+          {id: 'sustentabilidade', name: 'Sustentabilidade'},
+          {id: 'planejamento', name: 'Planejamento Urbano'},
+          {id: 'educacao', name: 'Educação'},
+          {id: 'meio', name: 'Meio Ambiente'},
+          {id: 'infraestrutura', name: 'Infraestrutura da Cidade'},
+          {id: 'seguranca', name: 'Segurança Pública'},
+          {id: 'energias', name: 'Energias Inteligentes'}
+        ];
+        
+        const selectorHtml = `
+          <div class="mb-4">
+            <label for="categorySelector" class="block text-sm font-medium text-gray-700 mb-1">
+              Selecione a categoria da ocorrência
+            </label>
+            <select id="categorySelector" name="categoryId" class="w-full rounded-md border border-gray-300 px-3 py-2" required>
+              <option value="">Selecione uma categoria</option>
+              ${categories.map(cat => `<option value="${cat.id}">${cat.name}</option>`).join('')}
+            </select>
+          </div>
+        `;
+        
+        const formEl = document.querySelector('form');
+        if (formEl) {
+          formEl.insertAdjacentHTML('afterbegin', selectorHtml);
+        }
+      }
+
       // Primeiro cria o mapa com uma posição temporária
       createMap(DEFAULT);
       
