@@ -1,7 +1,7 @@
 {
   "version": 2,
   "functions": {
-    "api/**/*.php": {
+    "api/*.php": {
       "runtime": "vercel-php@0.7.4"
     }
   },
@@ -16,16 +16,12 @@
       "dest": "/uploads/$1"
     },
     {
-      "src": "/(.*)\\.php$",
-      "dest": "/api/$1.php"
-    },
-    {
       "src": "/",
-      "dest": "/index.php"
+      "dest": "/api/dashboard.php"
     },
     {
-      "src": "/(.*)",
-      "dest": "/index.php"
+      "src": "/((?!api/).*)\\.php$",
+      "dest": "/api/$1.php"
     }
   ],
   "env": {
