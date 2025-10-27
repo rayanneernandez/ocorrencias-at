@@ -156,7 +156,7 @@ $prefs = $prefStmt->fetch() ?: ['notif_ocorrencias' => 1, 'notif_novidades' => 1
     <div class="md:hidden mb-4">
       <button onclick="location.href='dashboard.php'" class="w-full bg-green-600 text-white py-2 rounded-md flex items-center justify-center">
         <i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i>
-        Voltar ao Dashboard
+        Voltar Tela Inicial
       </button>
     </div>
 

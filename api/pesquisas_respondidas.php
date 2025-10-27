@@ -36,7 +36,7 @@ if (in_array('idUsuario',$valCols) && in_array('idPesquisa',$valCols)) {
   <header class="bg-green-700 text-white">
     <div class="container mx-auto px-6 py-4 flex items-center justify-between">
       <h1 class="text-xl font-bold">RADCI</h1>
-      <a href="dashboard.php" class="underline">Voltar ao Dashboard</a>
+      <a href="dashboard.php" class="underline">Voltar Tela Inicial</a>
     </div>
   </header>
 
