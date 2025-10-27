@@ -66,14 +66,14 @@ if ($userId > 0) {
             // Processa arquivos para extrair imagens
             foreach ($arquivos as $arquivo) {
                 if (isset($arquivo['url']) && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $arquivo['url'])) {
-                    $imageUrl = '../' . $arquivo['url'];
+                    $imageUrl = '/' . $arquivo['url'];  // Ajustado para caminho absoluto
                     $todasImagens[] = $imageUrl;
                     if (empty($primeiraImagem)) {
                         $primeiraImagem = $imageUrl;
                     }
                 }
             }
-            
+
             // Se não há imagem, usa placeholder
             if (empty($primeiraImagem)) {
                 $primeiraImagem = 'https://images.unsplash.com/photo-1509223197845-458d87318791';
@@ -181,7 +181,7 @@ if ($hasAnsweredPriorities) {
   ];
 }
 
-$surveyDir = __DIR__ . '/uploads/surveys';
+$surveyDir = __DIR__ . '/../uploads/surveys';
 if (is_dir($surveyDir)) {
   foreach (glob($surveyDir . '/*.json') as $file) {
     $meta = [];

@@ -23,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif (!is_array($questions) || count($questions) === 0) {
                 $flash_error = 'Adicione ao menos uma pergunta.';
             } else {
-                $outDir = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'surveys';
+                $outDir = __DIR__ . '/../uploads/surveys';
                 if (!is_dir($outDir)) { @mkdir($outDir, 0777, true); }
                 $fname = 'survey_' . date('Ymd_His') . '_' . substr(sha1(uniqid('', true)), 0, 8) . '.json';
                 $path  = $outDir . DIRECTORY_SEPARATOR . $fname;

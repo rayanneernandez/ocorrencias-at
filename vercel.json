@@ -1,31 +1,37 @@
 {
+  "version": 2,
   "functions": {
-    "api/*.php": {
-      "runtime": "vercel-php@0.6.0"
-    },
-    "pages/*.php": {
-      "runtime": "vercel-php@0.6.0"
-    },
-    "includes/*.php": {
-      "runtime": "vercel-php@0.6.0"
-    },
-    "*.php": {
+    "api/**/*.php": {
       "runtime": "vercel-php@0.6.0"
     }
   },
   "routes": [
     {
-      "src": "/api/(.*\\.php)$",
-      "dest": "/api/$1"
+      "src": "/(.*)\\.php$",
+      "dest": "/api/$1.php"
     },
     {
-      "src": "/pages/(.*\\.php)$",
-      "dest": "/pages/$1"
+      "src": "/assets/(.*)",
+      "dest": "/assets/$1"
     },
     {
-      "src": "/(.*\\.php)$",
-      "dest": "/$1"
+      "src": "/uploads/(.*)",
+      "dest": "/uploads/$1"
     },
+    {
+      "src": "/",
+      "dest": "/api/dashboard.php"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/$1.php"
+    }
+  ],
+  "env": {
+    "PHP_VERSION": "8.1"
+  },
+  "regions": ["gru1"]
+} },
     {
       "src": "/assets/(.*)",
       "dest": "/assets/$1"
@@ -41,11 +47,6 @@
   ],
   "env": {
     "PHP_VERSION": "8.1"
-  },
-  "build": {
-    "env": {
-      "PHP_VERSION": "8.1"
-    }
   },
   "regions": ["gru1"]
 }

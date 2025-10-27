@@ -118,7 +118,7 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Salva arquivos em pasta temporária pública para pré-visualização
                 $filesOut = [];
                 if (!empty($_FILES['files']['name'][0])) {
-                    $previewDir = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'temp';
+                    $previewDir = __DIR__ . '/../uploads/temp';
                     if (!is_dir($previewDir)) { @mkdir($previewDir, 0777, true); }
                     
                     foreach ($_FILES['files']['name'] as $i => $name) {
@@ -193,7 +193,7 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // Prepara diretórios de upload
                 $uploadDir = __DIR__ . '/../uploads';
-                $tempDir = __DIR__ . '/uploads/temp';
+                $tempDir = __DIR__ . '/../uploads/temp';
                 
                 // Garante que os diretórios existem
                 foreach ([$uploadDir, $tempDir] as $dir) {
