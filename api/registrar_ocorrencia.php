@@ -482,17 +482,90 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // NOVO: wrappers de geolocalização
-  function getCurrentPosition(options = {}) {
+  async function getCurrentPositionWithTimeout(timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
         reject(new Error('Geolocalização não suportada'));
         return;
       }
-      navigator.geolocation.getCurrentPosition(resolve, reject, options);
+
+      let watchId = null;
+      let timeoutId = null;
+      let bestPosition = null;
+
+      // Função para limpar os timers e watches
+      const cleanup = () => {
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+          watchId = null;
+        }
+        if (timeoutId !== null) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      // Função para resolver com a melhor posição
+      const resolveWithPosition = (position) => {
+        cleanup();
+        resolve(position);
+      };
+
+      // Configura o timeout
+      timeoutId = setTimeout(() => {
+        cleanup();
+        if (bestPosition) {
+          resolve(bestPosition);
+        } else {
+          // Se não tiver nenhuma posição, tenta uma última vez com configurações básicas
+          navigator.geolocation.getCurrentPosition(
+            resolve,
+            reject,
+            { 
+              enableHighAccuracy: false,
+              timeout: 3000,
+              maximumAge: 30000
+            }
+          );
+        }
+      }, timeoutMs);
+
+      // Função que observa atualizações de posição
+      const handlePosition = (position) => {
+        // Atualiza a melhor posição se for mais precisa
+        if (!bestPosition || position.coords.accuracy < bestPosition.coords.accuracy) {
+          bestPosition = position;
+          
+          // Se a precisão for boa o suficiente, resolve imediatamente
+          if (position.coords.accuracy <= 100) {
+            resolveWithPosition(position);
+          }
+        }
+      };
+
+      // Inicia o watch com alta precisão
+      watchId = navigator.geolocation.watchPosition(
+        handlePosition,
+        (error) => {
+          cleanup();
+          // Se falhar o watch, tenta uma vez com getCurrentPosition
+          navigator.geolocation.getCurrentPosition(
+            resolve,
+            reject,
+            { 
+              enableHighAccuracy: false,
+              timeout: 3000,
+              maximumAge: 30000
+            }
+          );
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: timeoutMs,
+          maximumAge: 0
+        }
+      );
     });
-  }
-  function getCurrentPositionWithTimeout(timeoutMs = 8000) {
-    return getCurrentPosition({ enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 });
   }
 
   // NOVO: mover mapa/marcador e opcionalmente sincronizar por reverse
@@ -509,32 +582,112 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // NOVO: reverse geocoding via API local
+  // Reverse geocoding via API local
   async function doReverse(lat, lng) {
     try {
-      const { id, signal } = newRequest();
-      const url = `../api/reverse.php?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=20`;
-      const res = await fetch(url, { signal });
-      const data = await res.json();
-      if (id !== lastRequestId) return;          // ignora respostas antigas
-      if (!data || data.error) return;
+      console.log('Iniciando reverse geocoding para:', lat, lng);
+      
+      // Atualiza imediatamente as coordenadas
+      coordsEl.value = `${lat},${lng}`;
 
-      const addr = data.address || {};
-      const city = addr.city || addr.town || addr.village || '';
-      const uf   = addr.state_code || (addr.state ? (addr.state.match(/[A-Z]{2}/)?.[0] || addr.state) : '');
-      const road = addr.road || addr.pedestrian || addr.footway || addr.path || '';
-      const number = addr.house_number || '';
-      const suburb = addr.suburb || addr.neighbourhood || addr.quarter || addr.hamlet || '';
-      const postcode = String(addr.postcode || '').replace(/\D/g, '');
-
-      const left = road ? (number ? `${road}, ${number}` : road) : '';
-      const right = city ? `${suburb ? suburb + ', ' : ''}${city}${uf ? ', ' + uf : ''}` : (suburb ? suburb : '');
-      const formatted = `${left}${right ? ' - ' + right : ''}`.trim();
-
-      if (formatted) addressEl.value = formatted;
-      if (postcode && postcode.length >= 8) cepEl.value = `${postcode.slice(0,5)}-${postcode.slice(5,8)}`;
+      // Primeiro tenta obter dados do Nominatim
+      const nominatimUrl = `/radci/api/reverse.php?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18`;
+      const nominatimRes = await fetch(nominatimUrl);
+      const nominatimData = await nominatimRes.json();
+      
+      console.log('Dados Nominatim:', nominatimData);
+      
+      if (nominatimData && nominatimData.address) {
+        const addr = nominatimData.address;
+        
+        // Extrai o CEP se disponível
+        const postcode = String(addr.postcode || '').replace(/\D/g, '');
+        
+        // Se tiver CEP válido, tenta usar o ViaCEP primeiro
+        if (postcode && postcode.length === 8) {
+          try {
+            console.log('Tentando ViaCEP com:', postcode);
+            const viacepUrl = `/radci/api/viacep.php?cep=${postcode}`;
+            const viacepRes = await fetch(viacepUrl);
+            const viacepData = await viacepRes.json();
+            
+            console.log('Dados ViaCEP:', viacepData);
+            
+            if (viacepData && !viacepData.erro) {
+              // Preenche campos com dados do ViaCEP
+              const fields = {
+                'address': viacepData.logradouro,
+                'bairro': viacepData.bairro,
+                'cidade': viacepData.localidade,
+                'estado': viacepData.uf,
+                'cep': postcode.replace(/(\d{5})(\d{3})/, '$1-$2')
+              };
+              
+              // Atualiza cada campo e dispara eventos
+              Object.entries(fields).forEach(([id, value]) => {
+                const el = document.getElementById(id);
+                if (el && value) {
+                  el.value = value;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              });
+              
+              // Adiciona o número se disponível do Nominatim
+              if (addr.house_number) {
+                const numberEl = document.getElementById('number');
+                if (numberEl) {
+                  numberEl.value = addr.house_number;
+                  numberEl.dispatchEvent(new Event('input', { bubbles: true }));
+                  numberEl.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              }
+              
+              console.log('Campos preenchidos com sucesso via ViaCEP');
+              return;
+            }
+          } catch (viacepErr) {
+            console.warn('Erro ao usar ViaCEP:', viacepErr);
+          }
+        }
+        
+        // Se ViaCEP falhou ou não tinha CEP, usa dados do Nominatim
+        console.log('Usando dados do Nominatim');
+        
+        // Extrai todos os campos possíveis
+        const fields = {
+          'number': addr.house_number || '',
+          'address': [
+            addr.road || addr.street || addr.pedestrian || addr.footway || addr.path,
+            addr.suburb || addr.neighbourhood || addr.quarter || addr.district,
+            addr.city || addr.town || addr.village || addr.municipality,
+            addr.state_code || (addr.state ? addr.state.match(/[A-Z]{2}/)?.[0] || addr.state : '')
+          ].filter(Boolean).join(', '),
+          'bairro': addr.suburb || addr.neighbourhood || addr.quarter || addr.district || '',
+          'cidade': addr.city || addr.town || addr.village || addr.municipality || '',
+          'estado': addr.state_code || (addr.state ? addr.state.match(/[A-Z]{2}/)?.[0] || addr.state : ''),
+          'cep': postcode && postcode.length === 8 ? postcode.replace(/(\d{5})(\d{3})/, '$1-$2') : ''
+        };
+        
+        // Atualiza cada campo e dispara eventos
+        Object.entries(fields).forEach(([id, value]) => {
+          const el = document.getElementById(id);
+          if (el && value) {
+            el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        });
+        
+        console.log('Campos preenchidos com sucesso via Nominatim');
+      } else {
+        console.warn('Sem dados de endereço do Nominatim');
+      }
+      
     } catch (err) {
-      console.warn('doReverse error', err);
+      console.warn('Erro no reverse geocoding:', err);
+      // Mantém as coordenadas atualizadas mesmo com erro
+      coordsEl.value = `${lat},${lng}`;
     }
   }
   if (!mapEl || typeof L === 'undefined') {
@@ -704,7 +857,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function geocodeAddress(query, expectedPostal = null, expectedCity = '', expectedState = '', expectedStreet = '', expectedNeighbourhood = '') {
     const { id, signal } = newRequest();
     try {
-      const res = await fetch(`../api/geocode.php?q=${encodeURIComponent(query)}&limit=5`, { signal });
+      const res = await fetch(`/radci/api/geocode.php?q=${encodeURIComponent(query)}&limit=5`, { signal });
       if (id !== lastRequestId) return null;
       const results = await res.json();
       if (!Array.isArray(results) || results.length === 0) return null;
@@ -726,9 +879,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const { id, signal } = newRequest();
   
       // ViaCEP → estrutura, com fallback se falhar (ex.: 502)
-      const via = await fetch(`../api/viacep.php?cep=${encodeURIComponent(cepDigits)}`, { signal });
+      const via = await fetch(`/radci/api//viacep.php?cep=${encodeURIComponent(cepDigits)}`, { signal });
       if (!via.ok) {
-        const uPostal = `../api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br&limit=10`;
+        const uPostal = `/radci/api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br&limit=10`;
         const rPostal = await (await fetch(uPostal, { signal })).json();
         if (id !== lastRequestId) return;
         const bestPostal = pickBest(rPostal, { expectedPostal: cepDigits });
@@ -758,7 +911,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const vbParam = bounds?.viewbox ? `&viewbox=${encodeURIComponent(bounds.viewbox)}&bounded=1` : '';
   
       // 1) street+postalcode+city+state com perímetro + BR
-      const u1 = `../api/geocode.php?street=${encodeURIComponent(rua)}&postalcode=${encodeURIComponent(cepDigits)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
+      const u1 = `/radci/api/geocode.php?street=${encodeURIComponent(rua)}&postalcode=${encodeURIComponent(cepDigits)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
       const r1 = await (await fetch(u1, { signal })).json();
       if (id !== lastRequestId) return;
       let best = pickBest(r1, {
@@ -774,7 +927,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
       // 2) postalcode puro com perímetro + BR
       if (!best) {
-        const u2 = `../api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br${vbParam}&limit=10`;
+        const u2 = `/radci/api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br${vbParam}&limit=10`;
         const r2 = await (await fetch(u2, { signal })).json();
         if (id !== lastRequestId) return;
         best = pickBest(r2, {
@@ -830,7 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const { id, signal } = newRequest();
 
       // 1) estruturado com perímetro + country br
-      const url1 = `../api/geocode.php?street=${encodeURIComponent(streetQuery)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
+      const url1 = `/radci/api/geocode.php?street=${encodeURIComponent(streetQuery)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
       const r1 = await (await fetch(url1, { signal })).json();
       if (id !== lastRequestId) return;
 
@@ -846,7 +999,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // 2) fallback livre no perímetro
       if (!found) {
         const free = `${streetQuery} - ${bairro ? bairro + ', ' : ''}${cidade}, ${uf} Brasil`;
-        const url2 = `../api/geocode.php?q=${encodeURIComponent(free)}&countrycodes=br${vbParam}&limit=10`;
+        const url2 = `/radci/api/geocode.php?q=${encodeURIComponent(free)}&countrycodes=br${vbParam}&limit=10`;
         const r2 = await (await fetch(url2, { signal })).json();
         if (id !== lastRequestId) return;
         found = pickBest(r2, {
@@ -907,24 +1060,120 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   addressEl.addEventListener('keydown', async (e) => { if (e.key === 'Enter') { e.preventDefault(); await fromAddressInput(addressEl.value); } });
 
-  // Inicialização: SEMPRE tenta GPS primeiro; refino por até 10s com indicador
+  // Inicialização do mapa e localização
   (async function init() {
     try {
-      const pos = await getCurrentPositionWithTimeout(8000);
-      const lat = pos.coords.latitude, lng = pos.coords.longitude;
-      createMap([lat,lng]);
-      await doReverse(lat,lng);
-      return;
+      // Primeiro cria o mapa com uma posição temporária
+      createMap(DEFAULT);
+      
+      console.log('Solicitando permissão de localização...');
+      
+      // Solicita permissão explicitamente
+      if (navigator.permissions && navigator.permissions.query) {
+        const permission = await navigator.permissions.query({ name: 'geolocation' });
+        if (permission.state === 'denied') {
+          throw new Error('Permissão de localização negada');
+        }
+      }
+      
+      console.log('Obtendo localização precisa...');
+      
+      // Configura para alta precisão
+      const options = {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      };
+      
+      // Tenta obter a localização atual
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      });
+      
+      console.log('Localização obtida:', position);
+      
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
+      
+      // Verifica se as coordenadas são válidas
+      if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        throw new Error('Coordenadas inválidas');
+      }
+      
+      console.log('Coordenadas válidas:', lat, lng);
+      
+      // Atualiza o mapa para a posição atual
+      map.setView([lat, lng], 18, { animate: false });
+      marker.setLatLng([lat, lng]);
+      
+      // Atualiza o campo de coordenadas
+      coordsEl.value = `${lat},${lng}`;
+      
+      // Tenta obter os dados do endereço
+      console.log('Obtendo dados do endereço...');
+      await doReverse(lat, lng);
+      
+      // Atualiza o indicador de precisão
+      const accBadge = document.getElementById('gpsBadge');
+      if (accBadge) {
+        if (accuracy <= 100) {
+          accBadge.textContent = `Localização precisa (${Math.round(accuracy)}m)`;
+          accBadge.style.backgroundColor = '#10B981'; // verde
+        } else {
+          accBadge.textContent = `Precisão: ${Math.round(accuracy)}m`;
+          accBadge.style.backgroundColor = '#F59E0B'; // amarelo
+        }
+        accBadge.style.display = 'block';
+        accBadge.style.color = 'white';
+        accBadge.style.padding = '4px 8px';
+        accBadge.style.borderRadius = '4px';
+      }
+      
     } catch (err) {
+      console.warn('Erro na inicialização:', err);
+      
+      // Tenta usar coordenadas salvas
       const saved = (coordsEl.value || '').split(',').map(Number);
       const hasSaved = saved.length === 2 && !isNaN(saved[0]) && !isNaN(saved[1]);
-      const start = hasSaved ? saved : DEFAULT;
-      createMap(start);
-      await doReverse(start[0], start[1]);
-      return;
+      
+      if (hasSaved) {
+        console.log('Usando coordenadas salvas:', saved);
+        map.setView(saved, 16);
+        marker.setLatLng(saved);
+        await doReverse(saved[0], saved[1]);
+      } else {
+        console.log('Usando coordenadas padrão:', DEFAULT);
+        map.setView(DEFAULT, 16);
+        marker.setLatLng(DEFAULT);
+        await doReverse(DEFAULT[0], DEFAULT[1]);
+      }
+      
+      // Mostra mensagem de erro
+      const accBadge = document.getElementById('gpsBadge');
+      if (accBadge) {
+        accBadge.textContent = 'Não foi possível obter sua localização';
+        accBadge.style.backgroundColor = '#EF4444'; // vermelho
+        accBadge.style.color = 'white';
+        accBadge.style.padding = '4px 8px';
+        accBadge.style.borderRadius = '4px';
+        accBadge.style.display = 'block';
+      }
     }
-    // REMOVIDO: geocodificar CEP/endereço da sessão aqui
-    return;
+    
+    // Configura os eventos do mapa
+    marker.on('dragend', async () => {
+      const pos = marker.getLatLng();
+      console.log('Marcador movido para:', pos);
+      await doReverse(pos.lat, pos.lng);
+    });
+
+    map.on('click', async (e) => {
+      console.log('Clique no mapa em:', e.latlng);
+      marker.setLatLng(e.latlng);
+      await doReverse(e.latlng.lat, e.latlng.lng);
+    });
+    
   })();
 
 });
