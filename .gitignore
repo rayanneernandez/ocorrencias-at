@@ -1,0 +1,63 @@
+# Arquivos de configuração local
+.env
+.env.local
+.env.production
+
+# Arquivos de banco de dados local
+*.sql
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+error.log
+access.log
+
+# Arquivos temporários
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Uploads (manter estrutura mas não os arquivos)
+uploads/*
+!uploads/.gitkeep
+!uploads/temp/
+uploads/temp/*
+!uploads/temp/.gitkeep
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependências (se usar Composer)
+vendor/
+composer.lock
+
+# Arquivos do Windows
+*.lnk
+
+# Arquivos Word (documentos de desenvolvimento)
+*.docx
+*.doc
+
+# Cache
+cache/
+*.cache
+
+# Configurações específicas do servidor
+.htaccess.local
+config.local.php
+
+# Arquivos de backup
+*.bak
+*.backup

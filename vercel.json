@@ -1,0 +1,42 @@
+{
+  "functions": {
+    "api/*.php": {
+      "runtime": "vercel-php@0.6.0"
+    },
+    "pages/*.php": {
+      "runtime": "vercel-php@0.6.0"
+    },
+    "includes/*.php": {
+      "runtime": "vercel-php@0.6.0"
+    },
+    "*.php": {
+      "runtime": "vercel-php@0.6.0"
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*\\.php)$",
+      "dest": "/api/$1"
+    },
+    {
+      "src": "/pages/(.*\\.php)$",
+      "dest": "/pages/$1"
+    },
+    {
+      "src": "/(.*\\.php)$",
+      "dest": "/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/pages/dashboard.php"
+    }
+  ],
+  "env": {
+    "PHP_VERSION": "8.1"
+  },
+  "build": {
+    "env": {
+      "PHP_VERSION": "8.1"
+    }
+  }
+}
