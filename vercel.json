@@ -27,8 +27,16 @@
       "dest": "/$1"
     },
     {
+      "src": "/assets/(.*)",
+      "dest": "/assets/$1"
+    },
+    {
+      "src": "/uploads/(.*)",
+      "dest": "/uploads/$1"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/pages/dashboard.php"
+      "dest": "/index.php"
     }
   ],
   "env": {
@@ -38,5 +46,6 @@
     "env": {
       "PHP_VERSION": "8.1"
     }
-  }
+  },
+  "regions": ["gru1"]
 }
