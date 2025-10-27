@@ -2,11 +2,10 @@
 function get_pdo() {
     $host_name = $_SERVER['HTTP_HOST'] ?? '';
     $server_name = $_SERVER['SERVER_NAME'] ?? '';
-    
-    // Detecta ambiente local (XAMPP, WAMP, etc.)
+
     $is_local = (
-        $host_name === 'localhost' || 
-        $host_name === '127.0.0.1' || 
+        $host_name === 'localhost' ||
+        $host_name === '127.0.0.1' ||
         strpos($host_name, 'localhost:') === 0 ||
         strpos($host_name, '127.0.0.1:') === 0 ||
         $server_name === 'localhost' ||
@@ -14,17 +13,15 @@ function get_pdo() {
     );
 
     if ($is_local) {
-        // Ambiente local (XAMPP/WAMP/MAMP)
         $host = 'localhost';
         $user = 'root';
         $pass = '';
-        $db   = 'radci';  // ← Seu banco de testes local
+        $db   = 'radci';
     } else {
-        // Ambiente de produção (hospedagem)
-        $host = 'localhost';
-        $user = 'u603491934_radci';
-        $pass = 'CkJ|Bhma6[hM';
-        $db   = 'u603491934_radci';
+        $host = $_ENV['DB_HOST'] ?? 'localhost';
+        $user = $_ENV['DB_USER'] ?? '';
+        $pass = $_ENV['DB_PASS'] ?? '';
+        $db   = $_ENV['DB_NAME'] ?? '';
     }
 
     try {
