@@ -7,42 +7,20 @@
   },
   "routes": [
     {
+      "src": "/assets/(.*)",
+      "dest": "/assets/$1"
+    },
+    {
+      "src": "/uploads/(.*)",
+      "dest": "/uploads/$1"
+    },
+    {
       "src": "/(.*)\\.php$",
       "dest": "/api/$1.php"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "/assets/$1"
-    },
-    {
-      "src": "/uploads/(.*)",
-      "dest": "/uploads/$1"
-    },
-    {
       "src": "/",
       "dest": "/api/dashboard.php"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/api/$1.php"
-    }
-  ],
-  "env": {
-    "PHP_VERSION": "8.1"
-  },
-  "regions": ["gru1"]
-} },
-    {
-      "src": "/assets/(.*)",
-      "dest": "/assets/$1"
-    },
-    {
-      "src": "/uploads/(.*)",
-      "dest": "/uploads/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.php"
     }
   ],
   "env": {
