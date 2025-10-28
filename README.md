@@ -44,15 +44,6 @@ Este projeto está configurado para deploy automático no Vercel:
 
 ### Variáveis de Ambiente (Vercel)
 
-Configure no painel do Vercel:
-
-```
-DB_HOST=seu_host_mysql
-DB_USER=seu_usuario
-DB_PASS=sua_senha
-DB_NAME=nome_do_banco
-```
-
 
 
 ## 🔧 Configuração Local
