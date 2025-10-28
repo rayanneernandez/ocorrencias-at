@@ -26,31 +26,48 @@ function http_get($url) {
         echo json_encode(['error' => 'http_'.$code]);
         exit;
     }
-    echo $resp;
+    return $resp;
 }
 
-$params = [
-    'format' => 'json',
-    'addressdetails' => '1',
-    'limit' => isset($_GET['limit']) ? $_GET['limit'] : '1',
-    'countrycodes' => 'br',
-    'dedupe' => '1'
-];
+// Função para processar o endereço e retornar coordenadas
+function geocode_address($address) {
+    $params = [
+        'format' => 'json',
+        'addressdetails' => '1',
+        'limit' => '1',
+        'countrycodes' => 'br',
+        'dedupe' => '1'
+    ];
 
-if (isset($_GET['q']) && $_GET['q'] !== '') {
-    $params['q'] = $_GET['q'];
+    // Se for um endereço completo, usa como query
+    if (isset($address)) {
+        $params['q'] = $address . ', Brasil';
+    }
+
+    $url = 'https://nominatim.openstreetmap.org/search?' . http_build_query($params);
+    $response = http_get($url);
+    $data = json_decode($response, true);
+
+    if (empty($data)) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Endereço não encontrado']);
+        exit;
+    }
+
+    // Retorna as coordenadas do primeiro resultado
+    $result = $data[0];
+    echo json_encode([
+        floatval($result['lat']),
+        floatval($result['lon'])
+    ]);
+}
+
+// Processa a requisição
+if (isset($_GET['address'])) {
+    geocode_address($_GET['address']);
+} else if (isset($_GET['q'])) {
+    geocode_address($_GET['q']);
 } else {
-    // campos estruturados
-    if (!empty($_GET['street'])) $params['street'] = $_GET['street'];
-    if (!empty($_GET['city'])) $params['city'] = $_GET['city'];
-    if (!empty($_GET['state'])) $params['state'] = $_GET['state'];
-    if (!empty($_GET['country'])) $params['country'] = $_GET['country']; else $params['country'] = 'Brasil';
-    if (!empty($_GET['postalcode'])) $params['postalcode'] = $_GET['postalcode'];
+    http_response_code(400);
+    echo json_encode(['error' => 'Parâmetro address ou q é obrigatório']);
 }
-
-// permite limitar pelo perímetro (cidade/UF) quando disponível
-if (!empty($_GET['viewbox'])) $params['viewbox'] = $_GET['viewbox'];
-if (!empty($_GET['bounded'])) $params['bounded'] = $_GET['bounded'];
-
-$url = 'https://nominatim.openstreetmap.org/search?' . http_build_query($params);
-http_get($url);

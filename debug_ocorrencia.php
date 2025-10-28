@@ -113,5 +113,5 @@ if (isset($_GET['test']) && $_GET['test'] == '1') {
 
 echo "<br><a href='?test=1'>🧪 Executar Teste de Inserção</a><br>";
 echo "<a href='api/registrar_ocorrencia.php'>🔙 Voltar ao Cadastro</a><br>";
-echo "<a href='test_db.php'>🔍 Ver Test DB</a>";
+echo "<a href='api/test_db.php'>🔍 Ver Test DB</a>";
 ?>

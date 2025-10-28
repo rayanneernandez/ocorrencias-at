@@ -114,7 +114,13 @@ if (isset($_POST['acao'])) {
     <title>RADCI - Login e Cadastro</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
+        :root {
+            --verde-principal: #065f46;
+            --verde-hover: #047857;
+        }
+
         <?php 
         $cssPath = __DIR__ . '/../assets/css/style.css';
         if (file_exists($cssPath)) {
@@ -162,7 +168,42 @@ if (isset($_POST['acao'])) {
         }
         input:focus, select:focus {
             outline: none;
-            box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
+            box-shadow: 0 0 0 3px rgba(6, 95, 70, 0.1);
+        }
+
+        /* Sobrescrever cores do Tailwind */
+        .text-green-500, .text-green-600, .text-green-700 {
+            color: var(--verde-principal) !important;
+        }
+
+        .bg-green-500, .bg-green-600, .bg-green-700 {
+            background-color: var(--verde-principal) !important;
+        }
+
+        .border-green-500, .border-green-600, .border-green-700 {
+            border-color: var(--verde-principal) !important;
+        }
+
+        .hover\:bg-green-500:hover, .hover\:bg-green-600:hover, .hover\:bg-green-700:hover {
+            background-color: var(--verde-hover) !important;
+        }
+
+        /* Estilo para o botão de mostrar senha */
+        .password-toggle {
+            position: absolute;
+            right: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6b7280;
+            cursor: pointer;
+            padding: 0.25rem;
+            border-radius: 0.375rem;
+            transition: all 0.2s;
+        }
+
+        .password-toggle:hover {
+            color: var(--verde-principal);
+            background-color: #f3f4f6;
         }
     </style>
 </head>
@@ -220,9 +261,8 @@ if (isset($_POST['acao'])) {
                                       text-base transition-colors pr-12"
                                placeholder="Digite sua senha">
                         <button type="button" onclick="togglePassword('loginSenha')" 
-                                class="absolute right-4 top-1/2 -translate-y-1/2 
-                                       text-gray-400 hover:text-gray-700 p-2">
-                            👁
+                                class="password-toggle">
+                            <i data-lucide="eye" class="w-5 h-5"></i>
                         </button>
                     </div>
                 </div>
@@ -279,7 +319,9 @@ if (isset($_POST['acao'])) {
                     <label class="text-sm mb-1 block">Senha *</label>
                     <div class="relative">
                         <input type="password" id="senhaCadastro" name="senha_cadastro" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500 pr-10">
-                        <button type="button" onclick="togglePassword('senhaCadastro')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">👁</button>
+                        <button type="button" onclick="togglePassword('senhaCadastro')" class="password-toggle">
+                            <i data-lucide="eye" class="w-5 h-5"></i>
+                        </button>
                     </div>
                 </div>
 
@@ -287,7 +329,9 @@ if (isset($_POST['acao'])) {
                     <label class="text-sm mb-1 block">Confirmar Senha *</label>
                     <div class="relative">
                         <input type="password" id="confirmSenhaCadastro" name="confirmar_senha" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500 pr-10">
-                        <button type="button" onclick="togglePassword('confirmSenhaCadastro')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">👁</button>
+                        <button type="button" onclick="togglePassword('confirmSenhaCadastro')" class="password-toggle">
+                            <i data-lucide="eye" class="w-5 h-5"></i>
+                        </button>
                     </div>
                 </div>
 
@@ -325,6 +369,9 @@ if (isset($_POST['acao'])) {
 </div>
 
 <script>
+// Inicializa os ícones do Lucide
+lucide.createIcons();
+
 function switchTab(tab){
     if(tab==='login'){
         document.getElementById('tabLogin').style.display='block';
@@ -340,8 +387,18 @@ function switchTab(tab){
 }
 
 function togglePassword(id){
-    const input=document.getElementById(id);
-    input.type = input.type === 'password' ? 'text' : 'password';
+    const input = document.getElementById(id);
+    const button = input.nextElementSibling;
+    const icon = button.querySelector('i');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.setAttribute('data-lucide', 'eye-off');
+    } else {
+        input.type = 'password';
+        icon.setAttribute('data-lucide', 'eye');
+    }
+    lucide.createIcons();
 }
 
 document.getElementById('manualAddress').addEventListener('change', function(){

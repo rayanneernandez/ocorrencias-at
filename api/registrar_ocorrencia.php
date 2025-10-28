@@ -71,11 +71,23 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
         $step = max(1, $postedStep - 1);
     } else {
         if ($postedStep === 1) {
-            $_SESSION['report']['address'] = $_POST['address'] ?? '';
-            $_SESSION['report']['cep'] = $_POST['cep'] ?? '';
-            if (isset($_POST['coordinates'])) {
-                $_SESSION['report']['coordinates'] = explode(',', $_POST['coordinates']);
+            $newAddress = $_POST['address'] ?? '';
+            $newCep = $_POST['cep'] ?? '';
+            $newCoordinates = isset($_POST['coordinates']) ? explode(',', $_POST['coordinates']) : null;
+            
+            // Só atualiza as coordenadas se o endereço foi alterado e novas coordenadas foram fornecidas
+            if ($newAddress !== ($_SESSION['report']['address'] ?? '') && $newCoordinates) {
+                $_SESSION['report']['coordinates'] = $newCoordinates;
             }
+            
+            $_SESSION['report']['address'] = $newAddress;
+            $_SESSION['report']['cep'] = $newCep;
+            
+            // Se não tiver coordenadas definidas, usa as coordenadas padrão
+            if (empty($_SESSION['report']['coordinates'])) {
+                $_SESSION['report']['coordinates'] = [-22.9068, -43.1729];
+            }
+            
             $step = 2;
         } elseif ($postedStep === 2) {
             // Validação dos campos obrigatórios
@@ -182,6 +194,12 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($descricao)) {
                     throw new Exception('Descrição da ocorrência não especificada');
                 }
+                if (empty($endereco)) {
+                    throw new Exception('Endereço não especificado');
+                }
+                if (!is_array($coords) || count($coords) < 2 || !is_numeric($coords[0]) || !is_numeric($coords[1])) {
+                    throw new Exception('Coordenadas inválidas');
+                }
                 
                 // Gera número único da ocorrência
                 $stmt = $pdo->query("SELECT MAX(CAST(SUBSTRING(numero, 8) AS UNSIGNED)) as max_num FROM ocorrencias WHERE numero LIKE 'OC" . date('Y') . "%'");
@@ -216,6 +234,14 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Nenhum arquivo foi enviado');
                 }
                 
+                // Garante que o diretório de uploads existe e tem permissões corretas
+                if (!is_dir($uploadDir)) {
+                    if (!mkdir($uploadDir, 0777, true)) {
+                        throw new Exception('Não foi possível criar o diretório de uploads');
+                    }
+                }
+                chmod($uploadDir, 0777);
+                
                 foreach ($previewFiles as $file) {
                     if (empty($file['url'])) {
                         error_log("URL do arquivo vazio");
@@ -223,23 +249,11 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     
                     // Ajusta o caminho do arquivo temporário
-                    $tempPath = __DIR__ . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $file['url']);
+                    $tempPath = __DIR__ . '/../' . $file['url'];
                     error_log("Processando arquivo: " . $file['name'] . " (temp: $tempPath)");
                     
                     if (!file_exists($tempPath)) {
                         error_log("Arquivo temporário não encontrado: $tempPath");
-                        continue;
-                    }
-                    
-                    // Verifica se o arquivo é realmente um arquivo
-                    if (!is_file($tempPath)) {
-                        error_log("Caminho não é um arquivo: $tempPath");
-                        continue;
-                    }
-                    
-                    // Verifica se o arquivo pode ser lido
-                    if (!is_readable($tempPath)) {
-                        error_log("Arquivo não pode ser lido: $tempPath");
                         continue;
                     }
                     
@@ -481,7 +495,10 @@ document.addEventListener('DOMContentLoaded', () => {
     return { id, signal: controller.signal };
   }
 
-  // NOVO: wrappers de geolocalização
+  // NOVO: wrappers de geolocalização com controle de posição atual
+  let currentUserPosition = null;
+  let currentPositionAccuracy = null;
+
   async function getCurrentPositionWithTimeout(timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
@@ -508,6 +525,8 @@ document.addEventListener('DOMContentLoaded', () => {
       // Função para resolver com a melhor posição
       const resolveWithPosition = (position) => {
         cleanup();
+        currentUserPosition = position;
+        currentPositionAccuracy = position.coords.accuracy;
         resolve(position);
       };
 
@@ -515,11 +534,17 @@ document.addEventListener('DOMContentLoaded', () => {
       timeoutId = setTimeout(() => {
         cleanup();
         if (bestPosition) {
+          currentUserPosition = bestPosition;
+          currentPositionAccuracy = bestPosition.coords.accuracy;
           resolve(bestPosition);
         } else {
           // Se não tiver nenhuma posição, tenta uma última vez com configurações básicas
           navigator.geolocation.getCurrentPosition(
-            resolve,
+            position => {
+              currentUserPosition = position;
+              currentPositionAccuracy = position.coords.accuracy;
+              resolve(position);
+            },
             reject,
             { 
               enableHighAccuracy: false,
@@ -550,7 +575,11 @@ document.addEventListener('DOMContentLoaded', () => {
           cleanup();
           // Se falhar o watch, tenta uma vez com getCurrentPosition
           navigator.geolocation.getCurrentPosition(
-            resolve,
+            position => {
+              currentUserPosition = position;
+              currentPositionAccuracy = position.coords.accuracy;
+              resolve(position);
+            },
             reject,
             { 
               enableHighAccuracy: false,
@@ -568,19 +597,70 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // NOVO: mover mapa/marcador e opcionalmente sincronizar por reverse
+  let isAddressManual = false;
+  let lastManualAddress = '';
+
+  // Mover mapa/marcador e opcionalmente sincronizar por reverse
   async function applyPosition(lat, lng, opts = {}) {
     if (!map) {
       createMap([lat, lng]);
+      // Adiciona botão de localização atual
+      L.control.locate({
+        position: 'topright',
+        strings: {
+          title: "Usar minha localização"
+        },
+        onLocationError: function(err) {
+          console.error('Erro ao obter localização:', err);
+          alert('Não foi possível obter sua localização.');
+        },
+        onLocationOutsideMapBounds: function(context) {
+          alert('Sua localização está fora dos limites do mapa.');
+        },
+        onActivate: async function() {
+          try {
+            const pos = await getCurrentPositionWithTimeout();
+            await applyPosition(pos.coords.latitude, pos.coords.longitude, {reverse: true});
+          } catch(err) {
+            console.error('Erro ao obter localização:', err);
+          }
+        }
+      }).addTo(map);
     } else {
       marker.setLatLng([lat, lng]);
       map.setView([lat, lng]);
     }
     setCoords(lat, lng);
-    if (opts.reverse) {
+    
+    // Só faz reverse se for solicitado E não estiver em modo manual
+    if (opts.reverse && !isAddressManual) {
       await doReverse(lat, lng);
     }
   }
+  
+  // Configura o modo manual do endereço
+  if (addressEl) {
+    // Quando o usuário digita, ativa o modo manual
+    addressEl.addEventListener('input', (e) => {
+      const value = e.target.value;
+      if (value && value !== lastManualAddress) {
+        isAddressManual = true;
+        lastManualAddress = value;
+      }
+    });
+
+    // Quando o usuário confirma o endereço (pressiona Enter)
+    addressEl.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const value = addressEl.value;
+        if (value) {
+          await fromAddressInput(value);
+        }
+      }
+    });
+  }
+
 
   // Reverse geocoding via API local
   async function doReverse(lat, lng) {
@@ -758,7 +838,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!city || !uf) return null;
       const { id, signal } = newRequest();
       try {
-          const res = await fetch(`../api/geocode.php?q=${encodeURIComponent(`${city}, ${uf} Brasil`)}&limit=1`, { signal });
+          const res = await fetch(`./api/geocode.php?q=${encodeURIComponent(`${city}, ${uf} Brasil`)}&limit=1`, { signal });
           if (id !== lastRequestId) return null;
           const data = await res.json();
           if (Array.isArray(data) && data[0] && data[0].boundingbox) {
@@ -857,7 +937,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function geocodeAddress(query, expectedPostal = null, expectedCity = '', expectedState = '', expectedStreet = '', expectedNeighbourhood = '') {
     const { id, signal } = newRequest();
     try {
-      const res = await fetch(`/radci/api/geocode.php?q=${encodeURIComponent(query)}&limit=5`, { signal });
+      const res = await fetch(`./api/geocode.php?q=${encodeURIComponent(query)}&limit=5`, { signal });
       if (id !== lastRequestId) return null;
       const results = await res.json();
       if (!Array.isArray(results) || results.length === 0) return null;
@@ -879,18 +959,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const { id, signal } = newRequest();
   
       // ViaCEP → estrutura, com fallback se falhar (ex.: 502)
-      const via = await fetch(`/radci/api//viacep.php?cep=${encodeURIComponent(cepDigits)}`, { signal });
+      const via = await fetch(`./api/viacep.php?cep=${encodeURIComponent(cepDigits)}`, { signal });
       if (!via.ok) {
-        const uPostal = `/radci/api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br&limit=10`;
+        const uPostal = `./api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br&limit=10`;
         const rPostal = await (await fetch(uPostal, { signal })).json();
         if (id !== lastRequestId) return;
         const bestPostal = pickBest(rPostal, { expectedPostal: cepDigits });
         if (bestPostal && bestPostal.lat && bestPostal.lon) {
+          isAddressManual = false; // Permite atualização do endereço
           await applyPosition(parseFloat(bestPostal.lat), parseFloat(bestPostal.lon), { reverse: true });
           cepEl.value = formatCepDigits(cepDigits);
           return;
         }
-        alert(`Erro ao consultar ViaCEP (HTTP ${via.status}).`);
+        alert(`CEP não encontrado. Por favor, verifique o número informado.`);
         return;
       }
   
@@ -911,7 +992,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const vbParam = bounds?.viewbox ? `&viewbox=${encodeURIComponent(bounds.viewbox)}&bounded=1` : '';
   
       // 1) street+postalcode+city+state com perímetro + BR
-      const u1 = `/radci/api/geocode.php?street=${encodeURIComponent(rua)}&postalcode=${encodeURIComponent(cepDigits)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
+      const u1 = `./api/geocode.php?street=${encodeURIComponent(rua)}&postalcode=${encodeURIComponent(cepDigits)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
       const r1 = await (await fetch(u1, { signal })).json();
       if (id !== lastRequestId) return;
       let best = pickBest(r1, {
@@ -927,7 +1008,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
       // 2) postalcode puro com perímetro + BR
       if (!best) {
-        const u2 = `/radci/api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br${vbParam}&limit=10`;
+        const u2 = `./api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br${vbParam}&limit=10`;
         const r2 = await (await fetch(u2, { signal })).json();
         if (id !== lastRequestId) return;
         best = pickBest(r2, {
@@ -953,10 +1034,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Endereço → busca estruturada limitada por cidade/UF; fallback centro da cidade
   async function fromAddressInput(q) {
-    stopRefine();
     if (!q || q.trim().length < 4) return;
+    
     try {
-      // "Rua, Número - Bairro, Cidade, UF" (aceita também sem número)
+      // Busca coordenadas do endereço completo primeiro
+      try {
+        const geocodeResult = await fetch(`./api/geocode.php?address=${encodeURIComponent(q)}`).then(async r => {
+          if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+          const data = await r.json();
+          return data;
+        });
+        if (geocodeResult && geocodeResult.length === 2) {
+          await applyPosition(geocodeResult, false);
+          lastManualAddress = q;
+          addressInputEl.value = q;
+          return;
+        }
+      } catch (geocodeError) {
+        console.error('Erro ao geocodificar endereço completo:', geocodeError);
+      }
+      
+      // Se não conseguir, tenta parse estruturado
       const partsDash = q.split(' - ');
       const left = (partsDash[0] || '').trim();
       const right = (partsDash[1] || '').trim();
@@ -983,7 +1081,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const { id, signal } = newRequest();
 
       // 1) estruturado com perímetro + country br
-      const url1 = `/radci/api/geocode.php?street=${encodeURIComponent(streetQuery)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
+      const url1 = `./api/geocode.php?street=${encodeURIComponent(streetQuery)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
       const r1 = await (await fetch(url1, { signal })).json();
       if (id !== lastRequestId) return;
 
@@ -999,7 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // 2) fallback livre no perímetro
       if (!found) {
         const free = `${streetQuery} - ${bairro ? bairro + ', ' : ''}${cidade}, ${uf} Brasil`;
-        const url2 = `/radci/api/geocode.php?q=${encodeURIComponent(free)}&countrycodes=br${vbParam}&limit=10`;
+        const url2 = `./api/geocode.php?q=${encodeURIComponent(free)}&countrycodes=br${vbParam}&limit=10`;
         const r2 = await (await fetch(url2, { signal })).json();
         if (id !== lastRequestId) return;
         found = pickBest(r2, {
@@ -1024,18 +1122,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Eventos CEP/Endereço (param o refino e reposicionam)
+  // Eventos CEP/Endereço com controle manual
   cepEl.addEventListener('input', (e) => {
     const raw = e.target.value.replace(/\D/g,'');
     e.target.value = formatCepDigits(raw);
-    cepChangedByUser = true; // marca que foi o usuário
+    cepChangedByUser = true;
+    isAddressManual = false; // Permite atualização quando mudar CEP
   });
 
   cepEl.addEventListener('blur', async (e) => {
     const digits = (e.target.value || '').replace(/\D/g,'');
-    if (!cepChangedByUser) return;             // ignora blur não causado por edição
+    if (!cepChangedByUser) return;
     if (digits.length !== 8) { cepChangedByUser = false; return; }
     if (digits === lastCepFetchedDigits) { cepChangedByUser = false; return; }
+    isAddressManual = false; // Permite atualização do endereço
     await fromCepInput(e.target.value);
     lastCepFetchedDigits = digits;
     cepChangedByUser = false;
@@ -1046,19 +1146,46 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       const digits = (cepEl.value || '').replace(/\D/g,'');
       if (digits.length !== 8) return;
+      isAddressManual = false; // Permite atualização do endereço
       await fromCepInput(cepEl.value);
       lastCepFetchedDigits = digits;
       cepChangedByUser = false;
     }
   });
 
+  // Evento para o campo de CEP com formatação automática
+  cepEl.addEventListener('input', (e) => {
+    let value = e.target.value.replace(/\D/g, '');
+    if (value.length > 8) value = value.slice(0, 8);
+    e.target.value = value.replace(/^(\d{5})(\d)/, '$1-$2');
+    
+    if (value.length === 8) {
+      fromCepInput(value);
+    }
+  });
+
   let addrTimer = null;
   addressEl.addEventListener('input', (e) => {
-    const q = e.target.value;
+    const q = e.target.value.trim();
+    isAddressManual = true; // Marca como endereço manual
     if (addrTimer) clearTimeout(addrTimer);
-    addrTimer = setTimeout(async () => { await fromAddressInput(q); }, 600);
+    addrTimer = setTimeout(async () => {
+      if (q) {
+        isAddressManual = false; // Permite atualização após delay
+        await fromAddressInput(q);
+        lastManualAddress = q;
+      }
+    }, 600);
   });
-  addressEl.addEventListener('keydown', async (e) => { if (e.key === 'Enter') { e.preventDefault(); await fromAddressInput(addressEl.value); } });
+  
+  addressEl.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      isAddressManual = false;
+      await fromAddressInput(addressEl.value);
+      lastManualAddress = addressEl.value;
+    }
+  });
 
   // Inicialização do mapa e localização
   (async function init() {
@@ -1105,53 +1232,32 @@ document.addEventListener('DOMContentLoaded', () => {
       // Primeiro cria o mapa com uma posição temporária
       createMap(DEFAULT);
       
-      console.log('Solicitando permissão de localização...');
-      
-      // Solicita permissão explicitamente
-      if (navigator.permissions && navigator.permissions.query) {
-        const permission = await navigator.permissions.query({ name: 'geolocation' });
-        if (permission.state === 'denied') {
-          throw new Error('Permissão de localização negada');
-        }
+      // Tenta recuperar coordenadas salvas
+      const savedCoords = coordsEl.value.split(',').map(Number);
+      if (savedCoords.length === 2 && isFinite(savedCoords[0]) && isFinite(savedCoords[1])) {
+        await applyPosition(savedCoords[0], savedCoords[1], { reverse: true });
+        return;
       }
       
-      console.log('Obtendo localização precisa...');
+      // Se não tem coordenadas salvas, tenta obter localização atual
+      console.log('Solicitando permissão de localização...');
       
-      // Configura para alta precisão
-      const options = {
+      const position = await getCurrentPosition({
         enableHighAccuracy: true,
         timeout: 10000,
         maximumAge: 0
-      };
-      
-      // Tenta obter a localização atual
-      const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, options);
       });
-      
-      console.log('Localização obtida:', position);
       
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
-      const accuracy = position.coords.accuracy;
       
       // Verifica se as coordenadas são válidas
       if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
         throw new Error('Coordenadas inválidas');
       }
       
-      console.log('Coordenadas válidas:', lat, lng);
-      
-      // Atualiza o mapa para a posição atual
-      map.setView([lat, lng], 18, { animate: false });
-      marker.setLatLng([lat, lng]);
-      
-      // Atualiza o campo de coordenadas
-      coordsEl.value = `${lat},${lng}`;
-      
-      // Tenta obter os dados do endereço
-      console.log('Obtendo dados do endereço...');
-      await doReverse(lat, lng);
+      // Atualiza posição e obtém endereço
+      await applyPosition(lat, lng, { reverse: true });
       
       // Atualiza o indicador de precisão
       const accBadge = document.getElementById('gpsBadge');

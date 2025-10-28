@@ -58,19 +58,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $userId && !$erro) {
 <head>
   <meta charset="UTF-8">
   <title>RADCI - Confirmar Reset de Senha</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        <?php 
-        $cssPath = __DIR__ . '/../assets/css/style.css';
-        if (file_exists($cssPath)) {
-            echo file_get_contents($cssPath);
-        }
-        ?>
-        .hide-scrollbar::-webkit-scrollbar { display: none; }
-        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-    </style>.hide-scrollbar::-webkit-scrollbar { display: none; }
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    <?php 
+    $cssPath = __DIR__ . '/../assets/css/style.css';
+    if (file_exists($cssPath)) {
+        echo file_get_contents($cssPath);
+    }
+    ?>
+    .hide-scrollbar::-webkit-scrollbar { display: none; }
     .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    .password-toggle {
+      position: absolute;
+      right: 1rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #9CA3AF;
+      padding: 0.5rem;
+      border-radius: 0.375rem;
+      transition: color 0.2s;
+    }
+
+    .password-toggle:hover {
+      color: #4B5563;
+    }
   </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center bg-white text-gray-900">
@@ -94,6 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $userId && !$erro) {
       <?php if ($erro): ?>
         <p class="text-red-600 mb-3"><?= htmlspecialchars($erro) ?></p>
       <?php endif; ?>
+
       <?php if ($sucesso): ?>
         <p class="text-green-600 mb-3"><?= htmlspecialchars($sucesso) ?></p>
         <div class="mt-4 text-sm text-gray-600">
@@ -106,25 +121,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $userId && !$erro) {
           <div>
             <label class="text-sm mb-1 block">Nova senha</label>
             <div class="relative">
-              <input type="password" id="pwd1" name="senha" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-600 focus:ring-1 focus:ring-green-600 pr-10">
-              <button type="button" onclick="toggle('pwd1')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">👁</button>
+              <input type="password" id="pwd1" name="senha" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-600 focus:ring-1 focus:ring-green-600 pr-12">
+              <button type="button" onclick="togglePassword('pwd1')" class="password-toggle">
+                <i data-lucide="eye" class="w-5 h-5"></i>
+              </button>
             </div>
           </div>
           <div>
             <label class="text-sm mb-1 block">Confirmar senha</label>
             <div class="relative">
-              <input type="password" id="pwd2" name="confirm" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-600 focus:ring-1 focus:ring-green-600 pr-10">
-              <button type="button" onclick="toggle('pwd2')" class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">👁</button>
+              <input type="password" id="pwd2" name="confirm" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-600 focus:ring-1 focus:ring-green-600 pr-12">
+              <button type="button" onclick="togglePassword('pwd2')" class="password-toggle">
+                <i data-lucide="eye" class="w-5 h-5"></i>
+              </button>
             </div>
           </div>
-          <button type="submit" class="w-full bg-green-600 text-white py-3 rounded-md font-semibold">Salvar nova senha</button>
+          <button type="submit" class="w-full bg-green-600 text-white py-3 rounded-md font-semibold">Redefinir senha</button>
         </form>
       <?php endif; ?>
     </div>
   </div>
 
   <script>
-    function toggle(id){const i=document.getElementById(id); i.type = i.type==='password'?'text':'password';}
+    lucide.createIcons();
+
+    function togglePassword(inputId) {
+      const input = document.getElementById(inputId);
+      const button = input.nextElementSibling;
+      const icon = button.querySelector('i');
+      
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.setAttribute('data-lucide', 'eye-off');
+      } else {
+        input.type = 'password';
+        icon.setAttribute('data-lucide', 'eye');
+      }
+      lucide.createIcons();
+    }
   </script>
 </body>
 </html>

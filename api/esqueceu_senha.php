@@ -75,20 +75,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo file_get_contents($tailwindPath);
         }
         ?>
-    </style>.hide-scrollbar::-webkit-scrollbar { display: none; }
-    .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-  </style>
+        .hide-scrollbar::-webkit-scrollbar { 
+            display: none; 
+        }
+        .hide-scrollbar { 
+            -ms-overflow-style: none; 
+            scrollbar-width: none; 
+        }
+    </style>
 </head>
 <body class="min-h-screen flex flex-col items-center justify-center bg-white text-gray-900">
   <!-- Botão Voltar -->
   <div class="mb-4 self-start w-full max-w-md px-6">
-    <a href="login_cadastro.php" class="inline-block px-3 py-1 border border-green-600 text-green-600 rounded-md hover:bg-green-600 hover:text-white transition">← Voltar</a>
+    <a href="login_cadastro.php" class="inline-block px-3 py-1 border border-green-700 text-green-700 rounded-md hover:bg-green-700 hover:text-white transition">← Voltar</a>
   </div>
 
   <div class="w-full max-w-md">
     <!-- Logo -->
     <div class="flex items-center justify-center mb-4 space-x-3">
-      <div class="bg-green-600 p-2 rounded-xl">
+      <div class="bg-green-700 p-2 rounded-xl">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7h16c-4.418 0-8-3.134-8-7z"/>
         </svg>
@@ -112,13 +117,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <form method="POST" class="space-y-4">
         <div>
           <label class="text-sm mb-1 block">E-mail cadastrado</label>
-          <input type="email" name="email" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-600 focus:ring-1 focus:ring-green-600" placeholder="seu.email@exemplo.com">
+          <input type="email" name="email" required class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-700 focus:ring-1 focus:ring-green-700" placeholder="seu.email@exemplo.com">
         </div>
-        <button type="submit" class="w-full bg-green-600 text-white py-3 rounded-md font-semibold">Enviar link</button>
+        <button type="submit" class="w-full bg-green-700 text-white py-3 rounded-md font-semibold">Enviar link</button>
       </form>
 
       <div class="mt-4 text-sm text-gray-600">
-        <a href="login_cadastro.php" class="text-green-600 hover:underline">Voltar para login</a>
+        <a href="login_cadastro.php" class="text-green-700 hover:underline">Voltar para login</a>
       </div>
     </div>
   </div>
