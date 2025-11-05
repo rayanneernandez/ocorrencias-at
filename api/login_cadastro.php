@@ -383,6 +383,41 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 <div><label class="text-sm mb-1 block">CEP</label>
 <input type="text" id="cep" name="cep" maxlength="8" placeholder="00000000" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500"></div>
 
+<!-- Documentos do Prefeito (aparece somente quando perfil = Prefeito) -->
+<div id="prefeitoDocs" class="hidden mt-4 p-4 border border-gray-200 rounded-md bg-gray-50">
+  <h3 class="text-base font-semibold text-gray-800 mb-3">Documentos do Prefeito</h3>
+
+  <div class="mb-3">
+    <label class="text-sm mb-1 block">Tipo de Documento *</label>
+    <select id="docTipo" name="doc_tipo" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500">
+      <option value="">Selecione</option>
+      <option value="diploma_prefeito">Diploma de Prefeito</option>
+      <option value="termo_posse">Termo de Posse</option>
+      <option value="publicacao_oficial">Publicação Oficial</option>
+      <option value="oficio_timbre">Ofício com timbre da Prefeitura</option>
+      <option value="outros">Outros</option>
+    </select>
+    <small class="text-gray-500">Escolha o documento que comprova seu exercício atual.</small>
+  </div>
+
+  <div id="docOutrosWrap" class="hidden mb-3">
+    <label class="text-sm mb-1 block">Descreva o documento (quando selecionar “Outros”) *</label>
+    <input type="text" id="docOutros" name="doc_outros" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Ex.: Certidão, documento específico, etc.">
+  </div>
+
+  <div id="docFonteUrlWrap" class="hidden mb-3">
+    <label class="text-sm mb-1 block">URL da Publicação Oficial</label>
+    <input type="url" id="docFonteUrl" name="doc_fonte_url" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="https://diariooficial.exemplo.gov.br/...">
+    <small class="text-gray-500">Será validado se é um domínio oficial (gov.br, Diário Oficial ou TRE).</small>
+  </div>
+
+  <div class="mb-1">
+    <label class="text-sm mb-1 block">Anexos (até 3 arquivos - PDF ou imagem) *</label>
+    <input type="file" id="docArquivos" name="doc_arquivos[]" multiple accept="application/pdf,image/*" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500">
+    <small class="text-gray-500">Tipos permitidos: PDF, PNG, JPG, JPEG, WEBP.</small>
+  </div>
+</div>
+
 <?php
 function base_project_root() {
     $script = $_SERVER['SCRIPT_NAME'] ?? '/';
@@ -416,91 +451,126 @@ $PROJECT_ROOT = base_project_root();
 </div>
 
 </div>
+</div>
+
+<!-- Script: abas (global) e Prefeito -->
+<script>
+// Define switchTab de forma global para os botões com onclick
+function switchTab(tab) {
+  const login = document.getElementById('tabLogin');
+  const cadastro = document.getElementById('tabCadastro');
+  const btnLogin = document.getElementById('tabBtnLogin');
+  const btnCadastro = document.getElementById('tabBtnCadastro');
+
+  if (!login || !cadastro || !btnLogin || !btnCadastro) return;
+
+  if (tab === 'login') {
+    login.style.display = 'block';
+    cadastro.style.display = 'none';
+
+    btnLogin.classList.remove('text-gray-500','border-transparent');
+    btnLogin.classList.add('text-green-600','border-green-500');
+
+    btnCadastro.classList.remove('text-green-600','border-green-500');
+    btnCadastro.classList.add('text-gray-500','border-transparent');
+  } else {
+    login.style.display = 'none';
+    cadastro.style.display = 'block';
+
+    btnCadastro.classList.remove('text-gray-500','border-transparent');
+    btnCadastro.classList.add('text-green-600','border-green-500');
+
+    btnLogin.classList.remove('text-green-600','border-green-500');
+    btnLogin.classList.add('text-gray-500','border-transparent');
+  }
+
+  // Mantém o parâmetro na URL
+  const url = new URL(window.location);
+  url.searchParams.set('tab', tab);
+  history.replaceState(null, '', url);
+
+  // Recria ícones (se usa lucide)
+  if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
+}
+</script>
+
+<script>
+(function() {
+  function get(id) { return document.getElementById(id); }
+
+  // Toggling do bloco “Documentos do Prefeito”
+  function toggleDocs() {
+    const perfilSel = get('perfilSelect');
+    const docsWrap  = get('prefeitoDocs');
+    const outrosWrap = get('docOutrosWrap');
+    const urlWrap    = get('docFonteUrlWrap');
+    if (!perfilSel || !docsWrap) return;
+
+    const isPrefeito = perfilSel.value === 'prefeito';
+    docsWrap.classList.toggle('hidden', !isPrefeito);
+    docsWrap.style.display = isPrefeito ? 'block' : 'none';
+
+    if (!isPrefeito) {
+      if (outrosWrap) { outrosWrap.classList.add('hidden'); outrosWrap.style.display = 'none'; }
+      if (urlWrap)    { urlWrap.classList.add('hidden');    urlWrap.style.display    = 'none'; }
+    }
+  }
+
+  function handleDocTipoChange() {
+    const tipoSel    = get('docTipo');
+    const outrosWrap = get('docOutrosWrap');
+    const urlWrap    = get('docFonteUrlWrap');
+    if (!tipoSel) return;
+
+    const v = tipoSel.value;
+    const showOutros = v === 'outros';
+    const showUrl    = v === 'publicacao_oficial';
+
+    if (outrosWrap) { outrosWrap.classList.toggle('hidden', !showOutros); outrosWrap.style.display = showOutros ? 'block' : 'none'; }
+    if (urlWrap)    { urlWrap.classList.toggle('hidden', !showUrl);       urlWrap.style.display    = showUrl ? 'block' : 'none'; }
+  }
+
+  function init() {
+    // Aplica a aba inicial a partir do parâmetro
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') === 'login' ? 'login' : 'cadastro';
+    // Usa a função global recém-definida
+    switchTab(tabParam);
+
+    // Inicializa estado dos documentos do Prefeito
+    toggleDocs();
+    handleDocTipoChange();
+
+    // Listeners
+    const perfilSel = get('perfilSelect');
+    const tipoSel   = get('docTipo');
+    const filesInp  = get('docArquivos');
+
+    perfilSel && perfilSel.addEventListener('change', toggleDocs);
+    tipoSel   && tipoSel.addEventListener('change', handleDocTipoChange);
+    filesInp && filesInp.addEventListener('change', (e) => {
+      const files = e.target.files || [];
+      if (files.length > 3) {
+        alert('Você pode anexar no máximo 3 arquivos.');
+        e.target.value = '';
+      }
+    });
+
+    // Auto-maiuscular UF
+    const uf = get('uf');
+    uf && uf.addEventListener('input', () => { uf.value = uf.value.toUpperCase().slice(0,2); });
+
+    // Ícones
+    if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
 
 </body>
 </html>
-
-<script>
-
-
-function switchTab(tab) {
-    const login = document.getElementById('tabLogin');
-    const cadastro = document.getElementById('tabCadastro');
-    const btnLogin = document.getElementById('tabBtnLogin');
-    const btnCadastro = document.getElementById('tabBtnCadastro');
-
-    if (!login || !cadastro || !btnLogin || !btnCadastro) return;
-
-    if (tab === 'login') {
-        login.style.display = 'block';
-        cadastro.style.display = 'none';
-
-        btnLogin.classList.remove('text-gray-500','border-transparent');
-        btnLogin.classList.add('text-green-600','border-green-500');
-
-        btnCadastro.classList.remove('text-green-600','border-green-500');
-        btnCadastro.classList.add('text-gray-500','border-transparent');
-    } else {
-        login.style.display = 'none';
-        cadastro.style.display = 'block';
-
-        btnCadastro.classList.remove('text-gray-500','border-transparent');
-        btnCadastro.classList.add('text-green-600','border-green-500');
-
-        btnLogin.classList.remove('text-green-600','border-green-500');
-        btnLogin.classList.add('text-gray-500','border-transparent');
-    }
-
-    const url = new URL(window.location);
-    url.searchParams.set('tab', tab);
-    history.replaceState(null, '', url);
-}
-
-document.addEventListener("DOMContentLoaded", function(){
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab === 'login') { 
-        switchTab('login'); 
-    } else { 
-        switchTab('cadastro'); 
-    }
-
-    const manualAddress = document.getElementById('manualAddress');
-    const enderecos = document.getElementById('enderecos');
-    manualAddress && manualAddress.addEventListener('change', function(){
-        enderecos && enderecos.classList.toggle('hidden', !this.checked);
-    });
-
-    if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
-});
-
-// Exibe/oculta seção de documentos do Prefeito sem alterar o layout
-const perfilSel = document.getElementById('perfilSelect');
-const docsWrap  = document.getElementById('prefeitoDocs');
-const tipoSel   = document.getElementById('docTipo');
-const outrosWrap= document.getElementById('docOutrosWrap');
-const urlWrap   = document.getElementById('docFonteUrlWrap');
-const filesInp  = document.getElementById('docArquivos');
-
-function toggleDocs() {
-  const isPrefeito = (perfilSel.value === 'prefeito');
-  docsWrap.classList.toggle('hidden', !isPrefeito);
-  if (!isPrefeito) { outrosWrap.classList.add('hidden'); urlWrap.classList.add('hidden'); }
-}
-perfilSel.addEventListener('change', toggleDocs);
-window.addEventListener('DOMContentLoaded', toggleDocs);
-
-tipoSel?.addEventListener('change', () => {
-  const v = tipoSel.value;
-  outrosWrap.classList.toggle('hidden', v !== 'outros');
-  urlWrap.classList.toggle('hidden', v !== 'publicacao_oficial');
-});
-
-filesInp?.addEventListener('change', (e) => {
-  const files = e.target.files || [];
-  if (files.length > 3) {
-    alert('Você pode anexar no máximo 3 arquivos.');
-    e.target.value = ''; // limpa seleção
-  }
-});
-</script>
