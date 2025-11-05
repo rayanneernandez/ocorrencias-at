@@ -37,17 +37,18 @@ if (!function_exists('isActive')) {
 <style>
 #radci-mobile-nav {
   position: fixed; bottom: 0; left: 0; right: 0;
-  height: 64px; background: #ffffff; border-top: 1px solid #e5e7eb;
+  height: 64px; background: #1a2234; border-top: 1px solid #2d3748;
   display: flex; align-items: center; justify-content: space-around;
   padding: 6px 8px; z-index: 9999;
 }
 #radci-mobile-nav a {
-  flex: 1; text-align: center; text-decoration: none; color: #4b5563;
+  flex: 1; text-align: center; text-decoration: none; color: #ffffff;
   font-size: 12px; font-weight: 600; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
 }
-#radci-mobile-nav a .icon { width: 24px; height: 24px; margin-bottom: 4px; color: #4b5563; }
-#radci-mobile-nav a.active { color: #059669; }
-#radci-mobile-nav a.active .icon { color: #059669; }
+#radci-mobile-nav a .icon { width: 24px; height: 24px; margin-bottom: 4px; color: currentColor; }
+#radci-mobile-nav a:nth-child(1) { color: #10b981; }
+#radci-mobile-nav a:nth-child(2) { color: #6366f1; }
+#radci-mobile-nav a:nth-child(3) { color: #a855f7; }
 @media (min-width: 768px) { #radci-mobile-nav { display: none; } }
 </style>

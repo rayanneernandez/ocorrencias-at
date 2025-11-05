@@ -160,7 +160,10 @@ if (isset($_GET['logout'])) {
                 <!-- Card de Ocorrência -->
                 <div class="bg-white/20 rounded-xl p-4">
                   <div class="flex items-center gap-2 mb-2">
-                    <i data-lucide="alert-triangle" class="w-5 h-5 text-yellow-400"></i>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24">
+                      <path fill="#facc15" d="M12 2L1 21h22L12 2zm0 3.45l8.26 14.3H3.74L12 5.45z"/>
+                      <path fill="#facc15" d="M11 16h2v2h-2zm0-7h2v5h-2z"/>
+                    </svg>
                     <span class="text-sm text-white">Nova Ocorrência</span>
                   </div>
                   <div class="h-16 bg-white/30 rounded-lg mb-2 flex items-center justify-center">

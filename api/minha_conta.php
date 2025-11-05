@@ -1,306 +1,282 @@
 <?php
+// minha_conta.php
 session_start();
-require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/../includes/db.php'; // get_pdo()
 $pdo = get_pdo();
 
-if (!isset($_SESSION['usuario_id'])) {
-  header("Location: login_cadastro.php");
-  exit;
+// ---------- Função de envio de e-mail ----------
+function enviar_email_simples($destinatario, $assunto, $mensagemHtml) {
+    $from = 'no-reply@seu-dominio.com';
+    $headers  = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-type: text/html; charset=UTF-8\r\n";
+    $headers .= "From: RADCI <{$from}>\r\n";
+    return mail($destinatario, $assunto, $mensagemHtml, $headers);
 }
 
-$usuarioId = intval($_SESSION['usuario_id'] ?? 0);
-$flash = '';
-
-// Logout: destruir sessão e ir para tela principal
-if (isset($_POST['logout'])) {
-  session_unset();
-  session_destroy();
-  header("Location: principal.php");
-  exit;
-}
-
-// Carrega dados do usuário (nome, email, endereço/cidade)
-$stmt = $pdo->prepare("SELECT * FROM usuarios WHERE id = ?");
-$stmt->execute([$usuarioId]);
-$u = $stmt->fetch() ?: [];
-
-$usuario = [
-  "nome"        => $u['nome'] ?? ($_SESSION['usuario_nome'] ?? 'Usuário RADCI'),
-  "email"       => $u['email'] ?? '',
-  "cep"         => $u['cep'] ?? '',
-  "uf"          => $u['uf'] ?? '',
-  "municipio"   => $u['municipio'] ?? '',
-  "bairro"      => $u['bairro'] ?? '',
-  "rua"         => $u['rua'] ?? '',
-  "complemento" => $u['complemento'] ?? '',
-  "membro_desde"=> isset($u['created_at']) ? date('Y', strtotime($u['created_at'])) : date('Y'),
-];
-
-// Salvar alterações de perfil (exceto senha)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
-  $nome  = trim($_POST['nome'] ?? '');
-  $email = trim($_POST['email'] ?? '');
-  $cep   = trim($_POST['cep'] ?? '');
-  $uf    = strtoupper(trim($_POST['uf'] ?? ''));
-  $cidadeInput = trim($_POST['cidade'] ?? '');
-  // cidade pode vir como "Municipio - UF" ou apenas municipio
-  $municipio = $cidadeInput;
-  if (strpos($cidadeInput, ' - ') !== false) {
-    [$municipioPart, $ufPart] = explode(' - ', $cidadeInput, 2);
-    $municipio = trim($municipioPart);
-    $uf = strtoupper(trim($ufPart));
-  }
-  $bairro      = trim($_POST['bairro'] ?? '');
-  $rua         = trim($_POST['rua'] ?? '');
-  $complemento = trim($_POST['complemento'] ?? '');
-
-  $sql = "UPDATE usuarios
-             SET nome = ?, email = ?, cep = ?, uf = ?, municipio = ?, bairro = ?, rua = ?, complemento = ?
-           WHERE id = ?";
-  $pdo->prepare($sql)->execute([
-    $nome, $email, $cep, $uf, $municipio, $bairro, $rua, $complemento, $usuarioId
-  ]);
-  $flash = 'Dados atualizados com sucesso.';
-  // Atualiza objeto para refletir mudanças
-  $usuario['nome']        = $nome;
-  $usuario['email']       = $email;
-  $usuario['cep']         = $cep;
-  $usuario['uf']          = $uf;
-  $usuario['municipio']   = $municipio;
-  $usuario['bairro']      = $bairro;
-  $usuario['rua']         = $rua;
-  $usuario['complemento'] = $complemento;
-}
-
-// Carrega preferências de notificações (cria tabela se não existir)
+// ---------- Cria tabela reset_senhas se não existir ----------
 $pdo->exec("
-  CREATE TABLE IF NOT EXISTS usuarios_preferencias (
-    usuario_id INT PRIMARY KEY,
-    notif_ocorrencias TINYINT(1) NOT NULL DEFAULT 1,
-    notif_novidades  TINYINT(1) NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-  )
+CREATE TABLE IF NOT EXISTS reset_senhas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    usuario_id INT NOT NULL,
+    token VARCHAR(128) NOT NULL,
+    expira_em DATETIME NOT NULL,
+    usado TINYINT(1) DEFAULT 0,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX (token),
+    INDEX (usuario_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ");
-$prefStmt = $pdo->prepare("SELECT * FROM usuarios_preferencias WHERE usuario_id = ?");
-$prefStmt->execute([$usuarioId]);
-$prefs = $prefStmt->fetch() ?: ['notif_ocorrencias' => 1, 'notif_novidades' => 1];
-?>
 
+$tokenGet = $_GET['token'] ?? '';
+$mensagem_flash = '';
+$erro_redefinir = '';
+
+if (!empty($tokenGet)) {
+    $stmt = $pdo->prepare("SELECT * FROM reset_senhas WHERE token = ? LIMIT 1");
+    $stmt->execute([$tokenGet]);
+    $registro = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$registro) {
+        $erro_redefinir = "Token inválido.";
+    } elseif ($registro['usado']) {
+        $erro_redefinir = "Este link já foi utilizado.";
+    } elseif (strtotime($registro['expira_em']) < time()) {
+        $erro_redefinir = "Este link expirou.";
+    } else {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nova_senha'], $_POST['confirmar_senha'])) {
+            $nova = trim($_POST['nova_senha']);
+            $conf = trim($_POST['confirmar_senha']);
+            if (strlen($nova) < 6) {
+                $erro_redefinir = "A senha deve ter ao menos 6 caracteres.";
+            } elseif ($nova !== $conf) {
+                $erro_redefinir = "As senhas não conferem.";
+            } else {
+                $hash = password_hash($nova, PASSWORD_DEFAULT);
+                $pdo->prepare("UPDATE usuarios SET senha = ? WHERE id = ?")
+                    ->execute([$hash, $registro['usuario_id']]);
+                $pdo->prepare("UPDATE reset_senhas SET usado = 1 WHERE id = ?")
+                    ->execute([$registro['id']]);
+                $mensagem_flash = "Senha redefinida com sucesso. Você já pode fazer login.";
+            }
+        }
+
+        $stmtU = $pdo->prepare("SELECT id, nome, email FROM usuarios WHERE id = ? LIMIT 1");
+        $stmtU->execute([$registro['usuario_id']]);
+        $usuarioParaReset = $stmtU->fetch(PDO::FETCH_ASSOC);
+    }
+} else {
+    if (!isset($_SESSION['usuario_id'])) {
+        header("Location: login_cadastro.php");
+        exit;
+    }
+
+    $usuarioId = intval($_SESSION['usuario_id']);
+    $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE id = ? LIMIT 1");
+    $stmt->execute([$usuarioId]);
+    $u = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    $usuario = [
+        "id" => $u['id'] ?? $usuarioId,
+        "nome" => $u['nome'] ?? ($_SESSION['usuario_nome'] ?? 'Usuário RADCI'),
+        "email" => $u['email'] ?? '',
+        "cep" => $u['cep'] ?? '',
+        "uf" => $u['uf'] ?? '',
+        "municipio" => $u['municipio'] ?? '',
+        "bairro" => $u['bairro'] ?? '',
+        "rua" => $u['rua'] ?? '',
+        "complemento" => $u['complemento'] ?? '',
+        "created_at" => $u['created_at'] ?? date('Y-m-d'),
+    ];
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
+        $nome = trim($_POST['nome'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $cep = trim($_POST['cep'] ?? '');
+        $cidadeInput = trim($_POST['cidade'] ?? '');
+        $uf = strtoupper(trim($_POST['uf'] ?? ''));
+        $municipio = $cidadeInput;
+        if (strpos($cidadeInput, ' - ') !== false) {
+            [$municipioPart, $ufPart] = explode(' - ', $cidadeInput, 2);
+            $municipio = trim($municipioPart);
+            $uf = strtoupper(trim($ufPart));
+        }
+        $bairro = trim($_POST['bairro'] ?? '');
+        $rua = trim($_POST['rua'] ?? '');
+        $complemento = trim($_POST['complemento'] ?? '');
+
+        $pdo->prepare("UPDATE usuarios SET nome=?, email=?, cep=?, uf=?, municipio=?, bairro=?, rua=?, complemento=? WHERE id=?")
+            ->execute([$nome, $email, $cep, $uf, $municipio, $bairro, $rua, $complemento, $usuario['id']]);
+
+        $mensagem_flash = 'Dados atualizados com sucesso.';
+        $usuario['nome'] = $nome;
+        $usuario['email'] = $email;
+        $usuario['cep'] = $cep;
+        $usuario['uf'] = $uf;
+        $usuario['municipio'] = $municipio;
+        $usuario['bairro'] = $bairro;
+        $usuario['rua'] = $rua;
+        $usuario['complemento'] = $complemento;
+    }
+
+    $pdo->exec("
+    CREATE TABLE IF NOT EXISTS usuarios_preferencias (
+      usuario_id INT PRIMARY KEY,
+      notif_ocorrencias TINYINT(1) NOT NULL DEFAULT 1,
+      notif_novidades TINYINT(1) NOT NULL DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+
+    $prefStmt = $pdo->prepare("SELECT * FROM usuarios_preferencias WHERE usuario_id = ? LIMIT 1");
+    $prefStmt->execute([$usuario['id']]);
+    $prefs = $prefStmt->fetch(PDO::FETCH_ASSOC) ?: ['notif_ocorrencias'=>1,'notif_novidades'=>1];
+
+    if (isset($_POST['logout'])) {
+        session_unset();
+        session_destroy();
+        header("Location: principal.php");
+        exit;
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['enviar_link'])) {
+        $emailUser = $usuario['email'] ?? '';
+        if (!empty($emailUser)) {
+            $pdo->prepare("DELETE FROM reset_senhas WHERE usuario_id=?")->execute([$usuario['id']]);
+            $token = bin2hex(random_bytes(32));
+            $expira_em = date('Y-m-d H:i:s', strtotime('+1 hour'));
+            $pdo->prepare("INSERT INTO reset_senhas (usuario_id, token, expira_em) VALUES (?, ?, ?)")
+                ->execute([$usuario['id'], $token, $expira_em]);
+
+            $base = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS']==='on' ? "https" : "http") . "://{$_SERVER['HTTP_HOST']}" . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
+            $link = $base . '/' . basename(__FILE__) . '?token=' . urlencode($token);
+
+            $assunto = "Redefinição de Senha - RADCI";
+            $mensagemHtml = "
+                <p>Olá, <strong>".htmlspecialchars($usuario['nome'])."</strong>,</p>
+                <p>Clique no link abaixo para redefinir sua senha (válido por 1 hora):</p>
+                <p><a href='{$link}' style='color:#065f46'>Redefinir minha senha</a></p>
+            ";
+
+            $mensagem_flash = enviar_email_simples($emailUser,$assunto,$mensagemHtml) ?
+                "E-mail enviado com sucesso. Verifique sua caixa de entrada." :
+                "Falha ao enviar o e-mail. Verifique o servidor.";
+        } else {
+            $mensagem_flash = "E-mail não encontrado para este usuário.";
+        }
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Minha Conta | RADCI</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script defer src="https://unpkg.com/lucide@latest"></script>
-  <style>
-    :root {
-      --background: 0 0% 100%;
-      --foreground: 222.2 47.4% 11.2%;
-      --muted: 210 40% 96%;
-      --muted-foreground: 215 20.2% 65.1%;
-      --card: 0 0% 100%;
-      --border: 214.3 31.8% 91.4%;
-      --input: 214.3 31.8% 91.4%;
-      --primary: 142 71% 45%;
-      --primary-light: 142 76% 55%;
-      --primary-foreground: 0 0% 100%;
-      --destructive: 0 84.2% 60.2%;
-      --destructive-foreground: 0 0% 100%;
-    }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Minha Conta | RADCI</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/lucide@latest"></script>
+<style>:root{--primary:#065f46}</style>
 </head>
-<body class="min-h-screen bg-white pb-28 md:pb-8 text-[hsl(var(--foreground))]">
+<body class="min-h-screen bg-white text-gray-800">
 
-  <!-- =========================
-       Cabeçalho Principal
-  ========================== -->
-  <header class="bg-[hsl(var(--card))] border-b border-[hsl(var(--border))] sticky top-0 z-10 shadow-sm">
-    <div class="container mx-auto px-4 py-4 flex items-center justify-between">
-      <div class="flex items-center space-x-3">
-        <div class="bg-[hsl(var(--primary))] p-2 rounded-lg">
-          <i data-lucide="map-pin" class="w-6 h-6 text-[hsl(var(--primary-foreground))]"></i>
-        </div>
-        <div>
-          <h1 class="text-xl font-bold text-[hsl(var(--foreground))]">RADCI</h1>
-          <p class="text-xs text-[hsl(var(--muted-foreground))]">Minha Conta</p>
-        </div>
-      </div>
-      <!-- Botão Voltar (Desktop) -->
-      <a href="dashboard.php" class="hidden md:inline-flex items-center px-3 py-2 rounded text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition">
-        <i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i>
-        Voltar
-      </a>
-      <!-- Botão Sair (Desktop) -->
-      <form method="POST" class="hidden md:flex">
-        <button type="submit" name="logout" class="flex items-center px-3 py-2 rounded text-sm text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition">
-          <i data-lucide="log-out" class="w-4 h-4 mr-2"></i>
-          Sair
-        </button>
-      </form>
-    </div>
-  </header>
-
-  <!-- =========================
-       Conteúdo Principal
-  ========================== -->
-  <main class="container mx-auto px-4 py-8 max-w-2xl">
-    <?php if (!empty($flash)): ?>
-      <div class="mb-4 bg-green-50 border border-green-200 text-green-800 rounded-lg p-3">
-        <?= htmlspecialchars($flash) ?>
-      </div>
-    <?php endif; ?>
-
-    <!-- Voltar ao Dashboard (Mobile) -->
-    <div class="md:hidden mb-4">
-      <button onclick="location.href='dashboard.php'" class="w-full bg-green-600 text-white py-2 rounded-md flex items-center justify-center">
-        <i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i>
-        Voltar Tela Inicial
-      </button>
-    </div>
-
-    <!-- Cabeçalho do Perfil -->
-    <div class="flex items-center space-x-4 mb-8">
-      <div class="w-20 h-20 rounded-full bg-[hsl(var(--primary))] flex items-center justify-center text-[hsl(var(--primary-foreground))]">
-        <i data-lucide="user" class="w-10 h-10"></i>
-      </div>
+<header class="bg-white border-b py-4 shadow-sm">
+  <div class="container mx-auto px-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="bg-[var(--primary)] text-white w-10 h-10 rounded flex items-center justify-center font-bold">R</div>
       <div>
-        <h2 class="text-2xl font-bold text-[hsl(var(--foreground))]">Olá, <?= htmlspecialchars($usuario["nome"]); ?></h2>
-        <p class="text-[hsl(var(--muted-foreground))]">Membro desde <?= htmlspecialchars($usuario["membro_desde"]); ?></p>
+        <h1 class="text-lg font-semibold text-[var(--primary)]">RADCI</h1>
+        <p class="text-xs text-gray-500"><?= empty($tokenGet) ? 'Minha Conta' : 'Redefinição de senha' ?></p>
       </div>
     </div>
-
-    <!-- Informações da Conta -->
-    <section class="bg-[hsl(var(--card))] rounded-2xl shadow-md mb-6 p-6 space-y-4 border border-[hsl(var(--border))]">
-      <h3 class="text-lg font-semibold">Informações da Conta</h3>
-      <p class="text-sm text-[hsl(var(--muted-foreground))] mb-4">Gerencie seus dados pessoais</p>
-
-      <form method="POST" action="">
-        <input type="hidden" name="update_profile" value="1" />
-        <div class="space-y-2">
-          <label for="nome" class="block text-sm font-medium">Nome Completo</label>
-          <input type="text" id="nome" name="nome" value="<?= htmlspecialchars($usuario["nome"]); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-        </div>
-
-        <div class="space-y-2">
-          <label for="email" class="block text-sm font-medium">E-mail</label>
-          <div class="flex items-center gap-2">
-            <i data-lucide="mail" class="w-4 h-4 text-[hsl(var(--muted-foreground))]"></i>
-            <input type="email" id="email" name="email" value="<?= htmlspecialchars($usuario["email"]); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <label for="cep" class="block text-sm font-medium">CEP</label>
-            <input type="text" id="cep" name="cep" value="<?= htmlspecialchars($usuario["cep"]); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-          </div>
-          <div class="space-y-2">
-            <label for="cidade" class="block text-sm font-medium">Cidade</label>
-            <input type="text" id="cidade" name="cidade" value="<?= htmlspecialchars(($usuario["municipio"] ?: '') . ($usuario["uf"] ? ' - ' . $usuario["uf"] : '')); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div class="space-y-2">
-            <label for="bairro" class="block text-sm font-medium">Bairro</label>
-            <input type="text" id="bairro" name="bairro" value="<?= htmlspecialchars($usuario["bairro"]); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-          </div>
-          <div class="space-y-2">
-            <label for="rua" class="block text-sm font-medium">Rua</label>
-            <input type="text" id="rua" name="rua" value="<?= htmlspecialchars($usuario["rua"]); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-          </div>
-        </div>
-
-        <div class="space-y-2">
-          <label for="complemento" class="block text-sm font-medium">Complemento</label>
-          <input type="text" id="complemento" name="complemento" value="<?= htmlspecialchars($usuario["complemento"]); ?>" class="w-full border border-[hsl(var(--input))] rounded p-2 bg-[hsl(var(--background))]">
-        </div>
-
-        <button type="submit" class="w-full mt-4 bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] py-2 rounded-lg hover:bg-[hsl(var(--primary-light))] transition">
-          Salvar Alterações
-        </button>
-      </form>
-    </section>
-
-    <!-- Notificações -->
-    <section class="bg-[hsl(var(--card))] rounded-2xl shadow-md mb-6 p-6 border border-[hsl(var(--border))] space-y-4">
-      <h3 class="text-lg font-semibold">Notificações</h3>
-      <p class="text-sm text-[hsl(var(--muted-foreground))] mb-4">Configure suas preferências de notificação</p>
-
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <i data-lucide="bell" class="w-4 h-4 text-[hsl(var(--muted-foreground))]"></i>
-          <span class="text-sm">Atualizações de ocorrências</span>
-        </div>
-        <input type="checkbox" id="notif_ocorrencias" <?= intval($prefs['notif_ocorrencias']) ? 'checked' : '' ?> class="w-4 h-4 accent-[hsl(var(--primary))]">
-      </div>
-
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <i data-lucide="bell" class="w-4 h-4 text-[hsl(var(--muted-foreground))]"></i>
-          <span class="text-sm">Novidades da plataforma</span>
-        </div>
-        <input type="checkbox" id="notif_novidades" <?= intval($prefs['notif_novidades']) ? 'checked' : '' ?> class="w-4 h-4 accent-[hsl(var(--primary))]">
-      </div>
-
-      <div id="notif_status" class="text-xs text-[hsl(var(--muted-foreground))]"></div>
-    </section>
-
-    <!-- Alterar Senha (via confirmação por e-mail) -->
-    <section class="bg-[hsl(var(--card))] rounded-2xl shadow-md mb-6 p-6 border border-[hsl(var(--border))] space-y-4">
-      <h3 class="text-lg font-semibold">Segurança</h3>
-      <p class="text-sm text-[hsl(var(--muted-foreground))]">Para alterar sua senha, enviaremos um link de confirmação por e-mail.</p>
-      <form method="POST" action="solicitar_reset_senha.php" class="flex flex-col sm:flex-row gap-3">
-        <input type="hidden" name="usuario_id" value="<?= $usuarioId ?>">
-        <button type="submit" class="inline-flex items-center px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700">
-          <i data-lucide="shield-check" class="w-4 h-4 mr-2"></i>
-          Enviar confirmação por e-mail
-        </button>
-      </form>
-    </section>
-
-    <!-- Botão Sair (Mobile) -->
-    <form method="POST" class="md:hidden">
-      <button type="submit" name="logout" class="w-full bg-[hsl(var(--destructive))] text-[hsl(var(--destructive-foreground))] py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center">
-        <i data-lucide="log-out" class="w-4 h-4 mr-2"></i>
-        Sair da Conta
-      </button>
+    <?php if (empty($tokenGet)): ?>
+    <form method="POST" class="hidden md:block">
+      <button type="submit" name="logout" class="text-sm text-gray-600 hover:underline">Sair</button>
     </form>
-  </main>
+    <?php endif; ?>
+  </div>
+</header>
 
-  <!-- Navegação Mobile -->
-  <footer class="fixed bottom-0 left-0 w-full bg-[hsl(var(--card))] border-t border-[hsl(var(--border))] md:hidden">
-    <nav class="flex justify-around py-2">
-      <?php include __DIR__ . '/../includes/mobile_nav.php'; ?>
-    </nav>
-  </footer>
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      if (window.lucide && typeof lucide.createIcons === 'function') {
-        lucide.createIcons();
-      }
-      // Salva preferências de notificações via AJAX
-      const notifOc = document.getElementById('notif_ocorrencias');
-      const notifNv = document.getElementById('notif_novidades');
-      const statusEl = document.getElementById('notif_status');
+<main class="container mx-auto px-4 py-8 max-w-2xl">
+<?php if(!empty($mensagem_flash)): ?>
+<div class="mb-4 p-3 rounded bg-green-50 border border-green-200 text-green-800">
+<?= htmlspecialchars($mensagem_flash) ?>
+</div>
+<?php endif; ?>
 
-      function savePrefs() {
-        const formData = new FormData();
-        formData.append('notif_ocorrencias', notifOc.checked ? '1' : '0');
-        formData.append('notif_novidades',  notifNv.checked ? '1' : '0');
+<?php if(!empty($tokenGet)): ?>
+<div class="bg-white p-6 rounded-lg shadow">
+<h2 class="text-xl font-bold text-[var(--primary)] mb-2">Redefinir Senha</h2>
+<?php if(!empty($erro_redefinir)): ?>
+<p class="text-red-600 mb-4"><?= htmlspecialchars($erro_redefinir) ?></p>
+<?php else: ?>
+<form method="POST" class="space-y-3">
+<div><label class="block text-sm font-medium">Nova senha</label><input type="password" name="nova_senha" required class="w-full border p-2 rounded"></div>
+<div><label class="block text-sm font-medium">Confirmar nova senha</label><input type="password" name="confirmar_senha" required class="w-full border p-2 rounded"></div>
+<button class="bg-[var(--primary)] text-white px-4 py-2 rounded">Salvar nova senha</button>
+</form>
+<?php endif; ?>
+</div>
+<?php else: ?>
+<!-- Página Minha Conta -->
+<div class="flex items-center gap-4 mb-6">
+<div class="w-14 h-14 rounded-full bg-[var(--primary)] flex items-center justify-center text-white text-lg font-bold">
+<?= strtoupper(substr($usuario['nome'] ?? 'U',0,1)) ?>
+</div>
+<div>
+<h2 class="text-lg font-bold text-[var(--primary)]">Olá, <?= htmlspecialchars($usuario['nome'] ?? 'Usuário') ?></h2>
+<p class="text-xs text-gray-500">Membro desde <?= date('Y', strtotime($usuario['created_at'])) ?></p>
+</div>
+</div>
 
-        fetch('salvar_preferencias.php', { method: 'POST', body: formData })
-          .then(r => r.json())
-          .then(j => {
-            statusEl.textContent = j.ok ? 'Preferências salvas.' : ('Falha ao salvar: ' + (j.error || ''));
-          })
-          .catch(err => { statusEl.textContent = 'Erro de rede.'; });
-      }
-      notifOc && notifOc.addEventListener('change', savePrefs);
-      notifNv && notifNv.addEventListener('change', savePrefs);
-    });
-  </script>
+<section class="bg-white rounded p-6 shadow mb-6">
+<h3 class="font-semibold mb-3">Informações da Conta</h3>
+<form method="POST" class="space-y-3">
+<input type="hidden" name="update_profile" value="1"/>
+<label class="block text-sm">Nome completo</label>
+<input type="text" name="nome" value="<?= htmlspecialchars($usuario['nome'] ?? '') ?>" class="w-full border p-2 rounded"/>
+<label class="block text-sm">E-mail</label>
+<input type="email" name="email" value="<?= htmlspecialchars($usuario['email'] ?? '') ?>" class="w-full border p-2 rounded"/>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+<div><label class="block text-sm">CEP</label><input type="text" name="cep" value="<?= htmlspecialchars($usuario['cep'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
+<div><label class="block text-sm">Cidade (ex.: São Paulo - SP)</label><input type="text" name="cidade" value="<?= htmlspecialchars((($usuario['municipio'] ?? '') . ($usuario['uf'] ? ' - '.$usuario['uf'] : ''))) ?>" class="w-full border p-2 rounded"/></div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+<div><label class="block text-sm">Bairro</label><input type="text" name="bairro" value="<?= htmlspecialchars($usuario['bairro'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
+<div><label class="block text-sm">Rua</label><input type="text" name="rua" value="<?= htmlspecialchars($usuario['rua'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
+</div>
+<label class="block text-sm">Complemento</label>
+<input type="text" name="complemento" value="<?= htmlspecialchars($usuario['complemento'] ?? '') ?>" class="w-full border p-2 rounded"/>
+<div class="flex gap-3 mt-3">
+<button type="submit" class="bg-[var(--primary)] text-white px-4 py-2 rounded">Salvar Alterações</button>
+<a href="dashboard.php" class="px-4 py-2 border rounded text-sm">Voltar</a>
+</div>
+</form>
+</section>
+
+<section class="bg-white rounded p-6 shadow mb-6">
+<h3 class="font-semibold mb-3">Notificações</h3>
+<div class="flex items-center justify-between mb-3"><div>Atualizações de ocorrências</div><input type="checkbox" <?= intval($prefs['notif_ocorrencias']) ? 'checked' : '' ?> disabled/></div>
+<div class="flex items-center justify-between"><div>Novidades da plataforma</div><input type="checkbox" <?= intval($prefs['notif_novidades']) ? 'checked' : '' ?> disabled/></div>
+</section>
+
+<section class="bg-white rounded p-6 shadow">
+<h3 class="font-semibold mb-3">Segurança</h3>
+<p class="text-sm text-gray-600 mb-4">Para alterar sua senha, enviaremos um link de redefinição por e-mail.</p>
+<form method="POST" class="flex gap-3">
+<input type="hidden" name="enviar_link" value="1"/>
+<button type="submit" class="bg-[var(--primary)] text-white px-4 py-2 rounded inline-flex items-center">
+<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7h16c-4.418 0-8-3.134-8-7z"/></svg>
+Enviar confirmação por e-mail
+</button>
+</form>
+</section>
+
+<?php endif; ?>
+</main>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  if(window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+});
+</script>
 </body>
 </html>

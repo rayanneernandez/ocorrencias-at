@@ -13,17 +13,20 @@ function get_pdo() {
     );
 
     if ($is_local) {
-        $host = 'localhost';
+        // Força loopback e porta padrão do MySQL (XAMPP)
+        $host = '127.0.0.1';
+        $port = 3306;
         $user = 'root';
         $pass = '';
         $db   = 'radci';
     } else {
         $host = getenv('DB_HOST') ?: $_ENV['DB_HOST'] ?? 'localhost';
+        $port = intval(getenv('DB_PORT') ?: $_ENV['DB_PORT'] ?? 3306);
         $user = getenv('DB_USER') ?: $_ENV['DB_USER'] ?? '';
         $pass = getenv('DB_PASS') ?: $_ENV['DB_PASS'] ?? '';
         $db   = getenv('DB_NAME') ?: $_ENV['DB_NAME'] ?? '';
 
-        error_log("DB Connection Info - Host: $host, User: $user, Database: $db");
+        error_log("DB Connection Info - Host: $host:$port, User: $user, Database: $db");
         
         if (empty($host) || empty($user) || empty($db)) {
             error_log('Database environment variables not properly configured');
@@ -32,13 +35,14 @@ function get_pdo() {
     }
 
     try {
-        $dsn = "mysql:host=$host;dbname=$db;charset=utf8mb4";
+        $dsn = "mysql:host=$host;port=" . ($port ?? 3306) . ";dbname=$db;charset=utf8mb4";
         error_log("Attempting database connection: $dsn");
         
         $pdo = new PDO($dsn, $user, $pass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
+            PDO::ATTR_TIMEOUT            => 5, // timeout curto para evitar travamento
         ]);
         
         error_log("Database connection established successfully");

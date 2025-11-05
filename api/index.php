@@ -6,20 +6,20 @@ ini_set('display_errors', 1);
 
 session_start();
 
-// Código de debug removido para evitar o erro "headers already sent"
-
 if (isset($_SESSION['usuario_id']) && $_SESSION['usuario_id'] > 0) {
     $perfil = $_SESSION['usuario_perfil'] ?? 1;
 
     switch ($perfil) {
-        case 2: // Admin RADCI
+        case 10: // Admin
             header("Location: usuarios.php");
             break;
-        case 3: // Admin Público
-        case 4: // Secretário
-            header("Location: relatorios.php");
+        case 2: // Prefeito
+            header("Location: prefeito_inicio.php");
             break;
-        default: // Cidadão
+        case 3: // Secretário
+            header("Location: secretario.php");
+            break;
+        default: // 1=Cidadão
             header("Location: dashboard.php");
             break;
     }

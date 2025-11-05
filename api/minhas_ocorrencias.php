@@ -42,8 +42,7 @@ if (isset($_SESSION['usuario_id'])) {
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/lucide@latest"></script>
 </head>
-<body class="pb-28">
-
+<body>
     <!-- Header -->
     <header class="bg-white border-b border-gray-200">
         <div class="container mx-auto px-4 py-4">
@@ -55,7 +54,7 @@ if (isset($_SESSION['usuario_id'])) {
     </header>
 
     <!-- Conteúdo -->
-    <div class="container mx-auto px-4 py-8">
+    <div class="container mx-auto px-4 py-8 pb-24">
         <?php if(isset($_SESSION['flash_success'])): ?>
             <div class="mb-6 bg-green-50 border border-green-200 text-green-800 rounded-lg p-4">
                 <?= htmlspecialchars($_SESSION['flash_success']) ?>
@@ -117,6 +116,6 @@ if (isset($_SESSION['usuario_id'])) {
             }
         });
     </script>
-    <?php include __DIR__ . '/../includes/mobile_nav.php'; ?>
+    <?php include_once __DIR__ . '/../includes/mobile_nav.php'; ?>
 </body>
 </html>

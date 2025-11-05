@@ -1,27 +1,36 @@
 <?php
 session_start();
 require_once __DIR__ . '/../includes/db.php';
+require_once __DIR__ . '/notificacoes.php';
+
 $pdo = get_pdo();
+$notificacaoManager = new NotificacaoManager();
+
+// Verifica se há lembretes pendentes para enviar
+$notificacaoManager->enviarLembretePesquisaPendente();
 
 // Dados do usuário
 $userId       = intval($_SESSION['usuario_id'] ?? 0);
 $userNome     = trim($_SESSION['usuario_nome'] ?? ($_SESSION['usuario']['nome'] ?? 'Usuário'));
 $primeiroNome = explode(' ', $userNome)[0];
 
-// Categorias (ícones simples)
+// Busca notificações não lidas
+$notificacoesNaoLidas = $notificacaoManager->buscarNotificacoesNaoLidas($userId);
+
+// Categorias (ícones representativos)
 $categories = [
-  ['id'=>'saude','name'=>'Saúde','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'],
-  ['id'=>'inovacao','name'=>'Inovação','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-7 7c0 3 2 4 3 5l1 1h6l1-1c1-1 3-2 3-5a7 7 0 0 0-7-7z"/></svg>'],
-  ['id'=>'mobilidade','name'=>'Mobilidade','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="10" width="18" height="5" rx="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></svg>'],
-  ['id'=>'politicas','name'=>'Políticas Públicas','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8"/></svg>'],
-  ['id'=>'riscos','name'=>'Riscos Urbanos','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>'],
-  ['id'=>'sustentabilidade','name'=>'Sustentabilidade','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M11 3c-4 9 1 14 9 10-3 5-9 7-12 4S4 9 11 3z"/></svg>'],
-  ['id'=>'planejamento','name'=>'Planejamento Urbano','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18"/><rect x="14" y="8" width="7" height="13"/></svg>'],
-  ['id'=>'educacao','name'=>'Educação','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-teal-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M22 12l-10-5-10 5 10 5 10-5z"/><path d="M6 16v2c0 1.1.9 2 2 2h8"/></svg>'],
-  ['id'=>'meio','name'=>'Meio Ambiente','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2c3 6 1 10-4 12 2 4 6 5 9 2s4-7-2-14c-1 0-2 0-3 0z"/></svg>'],
-  ['id'=>'infraestrutura','name'=>'Infraestrutura da Cidade','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>'],
-  ['id'=>'seguranca','name'=>'Segurança Pública','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-4 9-8 10-4-1-8-5-8-10V6l8-4z"/></svg>'],
-  ['id'=>'energias','name'=>'Energias Inteligentes','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>'],
+    ['id'=>'saude','name'=>'Saúde','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#4CAF50"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-8.5 14h-1v-4h-4v-1h4V8h1v4h4v1h-4v4z"/></svg>'],
+    ['id'=>'inovacao','name'=>'Inovação','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#FFC107"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7zm2.85 11.1l-.85.6V16h-4v-2.3l-.85-.6C7.8 12.16 7 10.63 7 9c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.63-.8 3.16-2.15 4.1z"/></svg>'],
+    ['id'=>'mobilidade','name'=>'Mobilidade','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#2196F3"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.85 7h10.29l1.08 3.11H5.77L6.85 7zM19 17H5v-5h14v5z"/><circle cx="7.5" cy="14.5" r="1.5"/><circle cx="16.5" cy="14.5" r="1.5"/></svg>'],
+    ['id'=>'politicas','name'=>'Políticas Públicas','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#9C27B0"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-3.03 0-5.5-2.47-5.5-5.5 0-1.82.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>'],
+    ['id'=>'riscos','name'=>'Riscos Urbanos','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#FF5722"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>'],
+  ['id'=>'sustentabilidade','name'=>'Sustentabilidade','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#8BC34A"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>'],
+  ['id'=>'planejamento','name'=>'Planejamento Urbano','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#3F51B5"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>'],
+  ['id'=>'educacao','name'=>'Educação','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#FF9800"><path d="M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82zM12 3L1 9l11 6 9-4.91V17h2V9L12 3z"/></svg>'],
+  ['id'=>'meio','name'=>'Meio Ambiente','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#4CAF50"><path d="M12 22c4.97 0 9-4.03 9-9-4.97 0-9 4.03-9 9zM5.6 10.25c0 1.38 1.12 2.5 2.5 2.5.53 0 1.01-.16 1.42-.44l-.02.19c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5l-.02-.19c.4.28.89.44 1.42.44 1.38 0 2.5-1.12 2.5-2.5 0-1-.59-1.85-1.43-2.25.84-.4 1.43-1.25 1.43-2.25 0-1.38-1.12-2.5-2.5-2.5-.53 0-1.01.16-1.42.44l.02-.19C14.5 2.12 13.38 1 12 1S9.5 2.12 9.5 3.5l.02.19c-.4-.28-.89-.44-1.42-.44-1.38 0-2.5 1.12-2.5 2.5 0 1 .59 1.85 1.43 2.25-.84.4-1.43 1.25-1.43 2.25zM12 5.5c1.38 0 2.5 1.12 2.5 2.5s-1.12 2.5-2.5 2.5S9.5 9.38 9.5 8s1.12-2.5 2.5-2.5z"/></svg>'],
+  ['id'=>'infraestrutura','name'=>'Infraestrutura da Cidade','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#607D8B"><path d="M15 11V5l-3-3-3 3v2H3v14h18V11h-6zm-8 8H5v-2h2v2zm0-4H5v-2h2v2zm0-4H5V9h2v2zm6 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V9h2v2zm0-4h-2V5h2v2zm6 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>'],
+  ['id'=>'seguranca','name'=>'Segurança Pública','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#F44336"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>'],
+  ['id'=>'energias','name'=>'Energias Inteligentes','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="#FFEB3B"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>'],
 ];
 
 // Busca ocorrências do usuário no banco de dados
@@ -221,6 +230,41 @@ foreach ($ocorrencias as $o) {
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <style>
+  <?php
+  // Verifica se é a primeira visita do dia
+  $lastVisit = $_SESSION['last_visit'] ?? '';
+  $today = date('Y-m-d');
+  if ($lastVisit !== $today) {
+    $_SESSION['last_visit'] = $today;
+    $_SESSION['show_welcome'] = true;
+  }
+  ?>
+
+  /* NAV MOBILE */
+.mobile-nav .nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: #6b7280; /* cinza */
+  transition: all 0.2s ease;
+}
+
+.mobile-nav .nav-item svg {
+  fill: currentColor;
+}
+
+.mobile-nav .nav-item.active {
+  color: #00875A; /* verde do RADCI */
+  font-weight: 600;
+  transform: translateY(-2px);
+}
+
+.mobile-nav .nav-item:hover {
+  color: #00875A;
+  transform: translateY(-2px);
+}
+
   /* Reset básico */
   * {
     margin: 0;
@@ -272,13 +316,51 @@ foreach ($ocorrencias as $o) {
   .gap-6 { gap: 1.5rem; }
 
   /* Modal de notificações */
+  .notification-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .notification-header h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #1f2937;
+  }
+
+  .notification-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .clear-notifications {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: #6b7280;
+    background-color: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .clear-notifications:hover {
+    background-color: #e5e7eb;
+    color: #4b5563;
+  }
+
   .notification-item {
     display: flex;
     align-items: flex-start;
     gap: 12px;
     padding: 16px;
     border-bottom: 1px solid #e5e7eb;
-    transition: background-color 0.2s;
+    transition: all 0.2s;
   }
   
   .notification-item:hover {
@@ -290,9 +372,8 @@ foreach ($ocorrencias as $o) {
   }
   
   .notification-icon {
-    font-size: 20px;
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -300,12 +381,88 @@ foreach ($ocorrencias as $o) {
     border-radius: 50%;
     flex-shrink: 0;
   }
+
+  .notification-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .notification-icon.survey {
+    background-color: #f3e8ff;
+    color: #7e22ce;
+  }
+
+  .notification-icon.success {
+    background-color: #dcfce7;
+    color: #059669;
+  }
+
+  .notification-icon.warning {
+    background-color: #fef3c7;
+    color: #d97706;
+  }
+
+  .notification-icon.info {
+    background-color: #e0f2fe;
+    color: #0284c7;
+  }
+
+  .notification-content small {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #6b7280;
+    font-size: 0.875rem;
+  }
+
+  .notification-content small svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .notification-badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 9999px;
+    font-weight: 500;
+    margin-left: 0.5rem;
+  }
+
+  .notification-badge.success {
+    background-color: #dcfce7;
+    color: #059669;
+  }
+
+  .notification-badge.pending {
+    background-color: #f3e8ff;
+    color: #7e22ce;
+  }
   
   .notification-content h4 {
     margin: 0 0 4px 0;
     font-size: 14px;
     font-weight: 600;
     color: #1f2937;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .notification-badge {
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 9999px;
+  }
+
+  .notification-badge.pending {
+    background-color: #fef3c7;
+    color: #d97706;
+  }
+
+  .notification-badge.success {
+    background-color: #dcfce7;
+    color: #059669;
   }
   
   .notification-content p {
@@ -318,22 +475,39 @@ foreach ($ocorrencias as $o) {
   .notification-content small {
     font-size: 11px;
     color: #9ca3af;
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 
   .notification-content button {
     margin-top: 8px;
     background-color: #059669;
     color: white;
-    padding: 4px 12px;
+    padding: 6px 12px;
     border-radius: 4px;
     font-size: 12px;
     border: none;
     cursor: pointer;
-    transition: background-color 0.2s;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
   
   .notification-content button:hover {
     background-color: #047857;
+  }
+
+  .notification-content button.secondary {
+    background-color: #f3f4f6;
+    color: #6b7280;
+    border: 1px solid #e5e7eb;
+  }
+
+  .notification-content button.secondary:hover {
+    background-color: #e5e7eb;
+    color: #4b5563;
   }
 
   /* Backgrounds */
@@ -346,6 +520,11 @@ foreach ($ocorrencias as $o) {
   .bg-green-700 { background-color: #047857; }
   .bg-yellow-100 { background-color: #fef3c7; }
   .bg-red-500 { background-color: #ef4444; }
+
+  /* Ajuste para o menu móvel */
+  @media (max-width: 767px) {
+    .container { padding-bottom: 64px; }
+  }
 
   /* Texto */
   .text-gray-400 { color: #9ca3af; }
@@ -795,7 +974,7 @@ foreach ($ocorrencias as $o) {
   }
 </style>
 </head>
-<body class="bg-gray-50 flex flex-col min-h-screen pb-20">
+<body class="bg-gray-50 flex flex-col min-h-screen">
 
 <header class="bg-green-700 sticky top-0 z-30 shadow">
   <div class="px-4 py-3 flex items-center justify-between text-white">
@@ -894,11 +1073,14 @@ foreach ($ocorrencias as $o) {
     </div>
   </section>
 
+<!-- Container principal termina aqui -->
+</div>
 
 
-  <section class="mb-4 md:mb-6">
+
+  <!-- Categorias de ocorrências (desktop) -->
+  <section class="mb-4 block">
     <h3 class="text-lg font-bold mb-2">Registre Ocorrências</h3>
-  
     <div class="relative">
       <button type="button" id="catPrev"
               class="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white"
@@ -934,6 +1116,27 @@ foreach ($ocorrencias as $o) {
         </svg>
       </button>
     </div>
+  </section>
+
+  <!-- Categorias de ocorrências (mobile) -->
+  <section class="mb-4 block md:hidden">
+    <h3 class="text-lg font-bold mb-2">Registre Ocorrências</h3>
+    <div class="grid grid-cols-3 gap-3">
+      <?php foreach($categories as $cat): ?>
+      <form method="GET" action="registrar_ocorrencia.php">
+        <input type="hidden" name="categoryId" value="<?= htmlspecialchars($cat['id']) ?>">
+        <button type="submit" class="flex flex-col items-center group cursor-pointer hover:bg-gray-50 rounded-lg p-2 transition-all duration-200 w-full">
+          <div class="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-2 group-hover:shadow-lg group-hover:scale-105 transition-all duration-200">
+            <?= $cat['icon'] ?>
+          </div>
+          <span class="text-[10px] text-center text-gray-700 leading-tight group-hover:text-gray-900 font-medium">
+            <?= htmlspecialchars($cat['name']) ?>
+          </span>
+        </button>
+      </form>
+      <?php endforeach; ?>
+    </div>
+  </section>
     
     <script>
     document.addEventListener('DOMContentLoaded', function() {
@@ -993,7 +1196,7 @@ foreach ($ocorrencias as $o) {
     </section>
   <?php endif; ?>
 
-  <section class="mb-10 relative">
+  <section class="mb-10 relative pb-16">
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-bold text-gray-800">Últimas Ocorrências</h3>
       <!-- Botão + (mobile) -->
@@ -1131,7 +1334,7 @@ foreach ($ocorrencias as $o) {
         <div><div class="text-xs text-gray-500">Concluídas</div><div class="text-xl font-bold"><?= $totConcluidas ?></div></div>
       </div>
       <div class="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 8v4m0 4h.01"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24"><path fill="#facc15" d="M12 2L1 21h22L12 2z M11 16h2v2h-2zm0-7h2v5h-2z"/></svg>
         <div><div class="text-xs text-gray-500">Em Análise</div><div class="text-xl font-bold"><?= $totAndamento ?></div></div>
       </div>
     </div>
@@ -1315,18 +1518,125 @@ foreach ($ocorrencias as $o) {
     notificationModal.className = 'modal';
     notificationModal.style.display = 'block';
     
+    // Verifica se é a primeira visita do dia
+    <?php
+    $lastVisit = $_SESSION['last_visit'] ?? '';
+    $today = date('Y-m-d');
+    if ($lastVisit !== $today) {
+      $_SESSION['last_visit'] = $today;
+      $_SESSION['show_welcome'] = true;
+    }
+    ?>
+
     let notificationsHTML = '';
+    
+    <?php
+    // Busca notificações não lidas do banco de dados
+    $notificacoesNaoLidas = [];
+    try {
+      $stmt = $pdo->prepare("SELECT * FROM notificacoes WHERE usuario_id = ? AND lida = 0 ORDER BY data_criacao DESC");
+      $stmt->execute([$userId]);
+      $notificacoesNaoLidas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+      error_log("Erro ao buscar notificações: " . $e->getMessage());
+    }
+    
+    // Verifica primeira visita do dia
+    $last_visit = $_SESSION['last_visit'] ?? null;
+    $today = date('Y-m-d');
+    
+    if (!$last_visit || $last_visit !== $today) {
+      $_SESSION['last_visit'] = $today;
+      $_SESSION['show_welcome'] = true;
+    }
+    ?>
+    
+    <?php if (isset($_SESSION['show_welcome'])): ?>
+    notificationsHTML += `
+      <div class="notification-item">
+        <div class="notification-icon welcome">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/>
+          </svg>
+        </div>
+        <div class="notification-content">
+          <h4>
+            Bem-vindo(a) de volta!
+            <span class="notification-badge new">Hoje</span>
+          </h4>
+          <p>Olá <?= htmlspecialchars($primeiroNome) ?>, que bom ter você de volta! Continue contribuindo para tornar nossa cidade mais inteligente.</p>
+          <small>
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Agora mesmo
+          </small>
+        </div>
+      </div>`;
+    <?php
+    unset($_SESSION['show_welcome']);
+    endif;
+    
+    // Adiciona notificações do banco
+    foreach ($notificacoesNaoLidas as $notif): ?>
+    notificationsHTML += `
+      <div class="notification-item" data-id="<?= $notif['id'] ?>">
+        <div class="notification-icon <?= $notif['tipo'] ?>">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="<?= $notif['icone'] ?? 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' ?>"/>
+          </svg>
+        </div>
+        <div class="notification-content">
+          <h4>
+            <?= htmlspecialchars($notif['titulo']) ?>
+            <span class="notification-badge <?= $notif['tipo'] ?>">Novo</span>
+          </h4>
+          <p><?= htmlspecialchars($notif['mensagem']) ?></p>
+          <small>
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <?= date('d/m/Y H:i', strtotime($notif['data_criacao'])) ?>
+          </small>
+          <?php if (!empty($notif['link'])): ?>
+          <button onclick="location.href='<?= htmlspecialchars($notif['link']) ?>'" class="mt-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+            Ver Detalhes
+          </button>
+          <?php endif; ?>
+        </div>
+      </div>`;
+    <?php endforeach; ?>
     
     // Adicionar notificações de pesquisas não respondidas
     <?php if (!$hasAnsweredPriorities): ?>
     notificationsHTML += `
       <div class="notification-item">
-        <div class="notification-icon">📋</div>
+        <div class="notification-icon survey">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+          </svg>
+        </div>
         <div class="notification-content">
-          <h4>Pesquisa de Prioridades Disponível</h4>
+          <h4>
+            Pesquisa de Prioridades
+            <span class="notification-badge pending">Pendente</span>
+          </h4>
           <p>Há uma pesquisa sobre as prioridades da sua cidade aguardando sua resposta.</p>
-          <small>Pendente</small>
-          <button onclick="location.href='prioridades.php'" class="mt-2 bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700">Responder Agora</button>
+          <small>
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 inline-block align-text-bottom" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Aguardando resposta
+          </small>
+          <button onclick="location.href='prioridades.php'" class="mt-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Responder Agora
+          </button>
         </div>
       </div>`;
     <?php endif; ?>
@@ -1334,40 +1644,95 @@ foreach ($ocorrencias as $o) {
     <?php foreach($availableSurveys as $sv): ?>
     notificationsHTML += `
       <div class="notification-item">
-        <div class="notification-icon">📋</div>
+        <div class="notification-icon survey">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+          </svg>
+        </div>
         <div class="notification-content">
-          <h4><?= htmlspecialchars($sv['title']) ?></h4>
+          <h4>
+            <?= htmlspecialchars($sv['title']) ?>
+            <span class="notification-badge pending">Nova</span>
+          </h4>
           <p><?= htmlspecialchars($sv['description'] ?? 'Nova pesquisa disponível para resposta.') ?></p>
-          <small>Pendente</small>
-          <button onclick="location.href='prioridades.php?survey_id=<?= urlencode($sv['sid']) ?>'" class="mt-2 bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700">Responder Agora</button>
+          <small>
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            Disponível agora
+          </small>
+          <button onclick="location.href='prioridades.php?survey_id=<?= urlencode($sv['sid']) ?>'">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            Responder Agora
+          </button>
         </div>
       </div>`;
     <?php endforeach; ?>
     
-    // Notificações padrão
+    // Notificações de ocorrências
+    <?php foreach($ocorrencias as $index => $ocorrencia): 
+      if ($index > 4) break; // Limita a 5 notificações mais recentes
+    ?>
     notificationsHTML += `
       <div class="notification-item">
-        <div class="notification-icon">🔔</div>
-        <div class="notification-content">
-          <h4>Nova ocorrência registrada</h4>
-          <p>Sua ocorrência foi registrada com sucesso e está sendo analisada.</p>
-          <small>Há 2 horas</small>
+        <div class="notification-icon <?= $ocorrencia['status'] === 'concluída' ? 'success' : ($ocorrencia['status'] === 'em andamento' ? 'info' : 'warning') ?>">
+          <?php if ($ocorrencia['status'] === 'concluída'): ?>
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <?php elseif ($ocorrencia['status'] === 'em andamento'): ?>
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          <?php else: ?>
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <?php endif; ?>
         </div>
-      </div>
-      <div class="notification-item">
-        <div class="notification-icon">✅</div>
         <div class="notification-content">
-          <h4>Ocorrência atualizada</h4>
-          <p>O status da sua ocorrência foi atualizado para "Em andamento".</p>
-          <small>Há 1 dia</small>
+          <h4>
+            <?= htmlspecialchars($ocorrencia['categoria']) ?>
+            <span class="notification-badge <?= $ocorrencia['status'] === 'concluída' ? 'success' : 'pending' ?>">
+              <?= ucfirst($ocorrencia['status']) ?>
+            </span>
+          </h4>
+          <p><?= htmlspecialchars($ocorrencia['descricao']) ?></p>
+          <small>
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            <?= $ocorrencia['data'] ?>
+          </small>
+          <button onclick="location.href='minhas_ocorrencias.php#ocorrencia-<?= $ocorrencia['id'] ?>'">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+            </svg>
+            Ver Detalhes
+          </button>
         </div>
       </div>`;
+    <?php endforeach; ?>
     
     notificationModal.innerHTML = `
       <div class="modal-content">
         <div class="modal-header">
           <h2>Notificações</h2>
-          <button type="button" class="close-btn" onclick="closeNotificationModal()">&times;</button>
+          <div class="notification-actions">
+            <button type="button" class="clear-notifications" onclick="clearAllNotifications()">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 5v6m4-6v6"/>
+              </svg>
+              Limpar Todas
+            </button>
+            <button type="button" class="close-btn" onclick="closeNotificationModal()">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="modal-body">
           ${notificationsHTML}
@@ -1377,7 +1742,44 @@ foreach ($ocorrencias as $o) {
     
     document.body.appendChild(notificationModal);
     document.body.style.overflow = 'hidden';
+
+    // Fechar modal ao clicar fora
+    notificationModal.addEventListener('click', function(e) {
+      if (e.target === notificationModal) {
+        closeNotificationModal();
+      }
+    });
   });
+
+  // Função para marcar notificação como lida
+  function marcarNotificacaoComoLida(notificacaoId) {
+    fetch('marcar_notificacao_lida.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ 
+        notificacao_id: notificacaoId,
+        usuario_id: <?= $userId ?>
+      })
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        // Atualiza o contador de notificações
+        const badge = document.getElementById('bellBadge');
+        if (badge) {
+          const count = parseInt(badge.textContent) - 1;
+          if (count > 0) {
+            badge.textContent = count;
+          } else {
+            badge.classList.add('hidden');
+          }
+        }
+      }
+    })
+    .catch(error => console.error('Erro ao marcar notificação como lida:', error));
+  }
 
   // Função para fechar modal de notificações
   window.closeNotificationModal = function() {
@@ -1387,6 +1789,46 @@ foreach ($ocorrencias as $o) {
       document.body.style.overflow = '';
     }
   };
+
+  // Função para limpar todas as notificações
+  window.clearAllNotifications = function() {
+    fetch('limpar_notificacoes.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ userId: <?= $userId ?> })
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        // Atualiza o contador de notificações
+        const badge = document.getElementById('bellBadge');
+        if (badge) {
+          badge.textContent = '0';
+          badge.classList.add('hidden');
+        }
+        // Fecha o modal
+        closeNotificationModal();
+      }
+    })
+    .catch(error => console.error('Erro ao limpar notificações:', error));
+  };
+
+  // Quando o modal de notificações é aberto
+  document.addEventListener('DOMContentLoaded', function() {
+    const notificationButton = document.getElementById('notificationButton');
+    if (notificationButton) {
+      notificationButton.addEventListener('click', function() {
+        // Marca todas as notificações visíveis como lidas
+        const notifications = document.querySelectorAll('.notification-item[data-id]');
+        notifications.forEach(notification => {
+          const notificacaoId = notification.dataset.id;
+          marcarNotificacaoComoLida(notificacaoId);
+        });
+      });
+    }
+  });
 })();
 </script>
 
@@ -1401,6 +1843,5 @@ foreach ($ocorrencias as $o) {
   }
 })();
 </script>
-
 </body>
 </html>

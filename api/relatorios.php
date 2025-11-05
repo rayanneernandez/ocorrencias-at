@@ -1,6 +1,27 @@
 <?php
 session_start();
 
+$perfil = intval($_SESSION['usuario_perfil'] ?? 0);
+
+if (!isset($_SESSION['usuario_id'])) {
+    header("Location: login_cadastro.php");
+    exit;
+}
+
+// Redireciona conforme perfil
+if ($perfil === 10) { // Admin
+    header("Location: relatorios_admin.php");
+    exit;
+}
+if ($perfil === 2) { // Prefeito
+    header("Location: relatorios_prefeito.php");
+    exit;
+}
+if ($perfil === 3) { // Secretário
+    header("Location: relatorios_secretario.php");
+    exit;
+}
+
 // Downloads CSV simples (demo)
 if (isset($_GET['download'])) {
     $type = $_GET['download'];

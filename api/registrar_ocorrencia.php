@@ -66,29 +66,41 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Passo atual enviado no formulário
     $postedStep = isset($_POST['step']) ? intval($_POST['step']) : $step;
 
-    // Navegação para trás: não valida, apenas retorna um passo
+    // Navegação para trás: não valida, apenas retorna um passo ou para o início
     if (isset($_POST['navigate']) && $_POST['navigate'] === 'back') {
-        $step = max(1, $postedStep - 1);
+        if ($postedStep === 1) {
+            // Se estiver no passo 1, volta para o dashboard
+            unset($_SESSION['report']);
+            header('Location: dashboard.php');
+            exit;
+        } else {
+            // Se estiver em outros passos, volta um passo
+            $step = max(1, $postedStep - 1);
+        }
     } else {
         if ($postedStep === 1) {
-            $newAddress = $_POST['address'] ?? '';
-            $newCep = $_POST['cep'] ?? '';
-            $newCoordinates = isset($_POST['coordinates']) ? explode(',', $_POST['coordinates']) : null;
+            // Validação dos campos obrigatórios
+            $errors = [];
             
-            // Só atualiza as coordenadas se o endereço foi alterado e novas coordenadas foram fornecidas
-            if ($newAddress !== ($_SESSION['report']['address'] ?? '') && $newCoordinates) {
-                $_SESSION['report']['coordinates'] = $newCoordinates;
+            if (empty($_POST['type'])) {
+                $errors[] = 'Selecione uma categoria';
             }
             
-            $_SESSION['report']['address'] = $newAddress;
-            $_SESSION['report']['cep'] = $newCep;
-            
-            // Se não tiver coordenadas definidas, usa as coordenadas padrão
-            if (empty($_SESSION['report']['coordinates'])) {
-                $_SESSION['report']['coordinates'] = [-22.9068, -43.1729];
+            if (empty($_POST['address'])) {
+                $errors[] = 'Informe o endereço';
             }
             
-            $step = 2;
+            if (!empty($errors)) {
+                $_SESSION['flash_error'] = implode(', ', $errors);
+            } else {
+                $_SESSION['report']['type'] = $_POST['type'];
+                $_SESSION['report']['address'] = $_POST['address'] ?? '';
+                $_SESSION['report']['cep'] = $_POST['cep'] ?? '';
+                if (isset($_POST['coordinates'])) {
+                    $_SESSION['report']['coordinates'] = explode(',', $_POST['coordinates']);
+                }
+                $step = 2;
+            }
         } elseif ($postedStep === 2) {
             // Validação dos campos obrigatórios
             $errors = [];
@@ -194,12 +206,6 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($descricao)) {
                     throw new Exception('Descrição da ocorrência não especificada');
                 }
-                if (empty($endereco)) {
-                    throw new Exception('Endereço não especificado');
-                }
-                if (!is_array($coords) || count($coords) < 2 || !is_numeric($coords[0]) || !is_numeric($coords[1])) {
-                    throw new Exception('Coordenadas inválidas');
-                }
                 
                 // Gera número único da ocorrência
                 $stmt = $pdo->query("SELECT MAX(CAST(SUBSTRING(numero, 8) AS UNSIGNED)) as max_num FROM ocorrencias WHERE numero LIKE 'OC" . date('Y') . "%'");
@@ -234,14 +240,6 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Nenhum arquivo foi enviado');
                 }
                 
-                // Garante que o diretório de uploads existe e tem permissões corretas
-                if (!is_dir($uploadDir)) {
-                    if (!mkdir($uploadDir, 0777, true)) {
-                        throw new Exception('Não foi possível criar o diretório de uploads');
-                    }
-                }
-                chmod($uploadDir, 0777);
-                
                 foreach ($previewFiles as $file) {
                     if (empty($file['url'])) {
                         error_log("URL do arquivo vazio");
@@ -249,11 +247,23 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     
                     // Ajusta o caminho do arquivo temporário
-                    $tempPath = __DIR__ . '/../' . $file['url'];
+                    $tempPath = __DIR__ . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $file['url']);
                     error_log("Processando arquivo: " . $file['name'] . " (temp: $tempPath)");
                     
                     if (!file_exists($tempPath)) {
                         error_log("Arquivo temporário não encontrado: $tempPath");
+                        continue;
+                    }
+                    
+                    // Verifica se o arquivo é realmente um arquivo
+                    if (!is_file($tempPath)) {
+                        error_log("Caminho não é um arquivo: $tempPath");
+                        continue;
+                    }
+                    
+                    // Verifica se o arquivo pode ser lido
+                    if (!is_readable($tempPath)) {
+                        error_log("Arquivo não pode ser lido: $tempPath");
                         continue;
                     }
                     
@@ -436,18 +446,65 @@ $data = $_SESSION['report'];
 <script>
 <?php if ($step === 1): ?>
 document.addEventListener('DOMContentLoaded', () => {
-  const mapEl = document.getElementById('map');
-  const coordsEl = document.getElementById('coordinates');
-  const cepEl = document.getElementById('cep');
-  const addressEl = document.getElementById('address');
+    const mapEl = document.getElementById('map');
+    const coordsEl = document.getElementById('coordinates');
+    const cepEl = document.getElementById('cep');
+    const addressEl = document.getElementById('address');
 
-  const DEFAULT = [-22.9068, -43.1729];
-  let map, marker;
-  let lastRequestId = 0;
-  let currentAbort = null;
-  let refineWatchId = null;
-  let cepChangedByUser = false;    // usuário editou o CEP?
-  let lastCepFetchedDigits = '';   // evita requisição repetida
+    const DEFAULT = [-22.9068, -43.1729];
+    let map, marker;
+    let lastRequestId = 0;
+    let currentAbort = null;
+    let refineWatchId = null;
+    let lastCepFetchedDigits = '';   // evita requisição repetida
+    let lastAddressQuery = '';      // evita requisição repetida de endereço
+
+  // Função para atualizar o mapa com novo endereço
+  async function updateMapFromAddress(address) {
+    try {
+      const nominatimUrl = `/radci/api/geocode.php?q=${encodeURIComponent(address)}&limit=1`;
+      const nominatimRes = await fetch(nominatimUrl);
+      const nominatimData = await nominatimRes.json();
+      
+      if (nominatimData && nominatimData.length > 0) {
+        const location = nominatimData[0];
+        await applyPosition(parseFloat(location.lat), parseFloat(location.lon), {reverse: true});
+        return true;
+      }
+    } catch (error) {
+      console.error('Erro ao geocodificar:', error);
+    }
+    return false;
+  }
+
+  // Monitora mudanças no CEP
+  cepEl?.addEventListener('input', async function() {
+    const cep = this.value.replace(/\D/g, '');
+    if (cep.length === 8) {
+      try {
+        const viacepUrl = `/radci/api/viacep.php?cep=${cep}`;
+        const response = await fetch(viacepUrl);
+        const data = await response.json();
+        
+        if (!data.erro) {
+          const fullAddress = `${data.logradouro}, ${data.bairro}, ${data.localidade} - ${data.uf}`;
+          if (addressEl) {
+            addressEl.value = fullAddress;
+            await geocodeAddress(fullAddress);
+          }
+        }
+      } catch (error) {
+        // Não mostra erro se falhar
+      }
+    }
+  });
+
+  // Monitora mudanças no campo de endereço
+  addressEl?.addEventListener('blur', async function() {
+    if (this.value.trim()) {
+      await updateMapFromAddress(this.value);
+    }
+  });
 
   // ÚNICA definição de newRequest
   function newRequest() {
@@ -495,10 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return { id, signal: controller.signal };
   }
 
-  // NOVO: wrappers de geolocalização com controle de posição atual
-  let currentUserPosition = null;
-  let currentPositionAccuracy = null;
-
+  // NOVO: wrappers de geolocalização
   async function getCurrentPositionWithTimeout(timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
@@ -525,8 +579,6 @@ document.addEventListener('DOMContentLoaded', () => {
       // Função para resolver com a melhor posição
       const resolveWithPosition = (position) => {
         cleanup();
-        currentUserPosition = position;
-        currentPositionAccuracy = position.coords.accuracy;
         resolve(position);
       };
 
@@ -534,17 +586,11 @@ document.addEventListener('DOMContentLoaded', () => {
       timeoutId = setTimeout(() => {
         cleanup();
         if (bestPosition) {
-          currentUserPosition = bestPosition;
-          currentPositionAccuracy = bestPosition.coords.accuracy;
           resolve(bestPosition);
         } else {
           // Se não tiver nenhuma posição, tenta uma última vez com configurações básicas
           navigator.geolocation.getCurrentPosition(
-            position => {
-              currentUserPosition = position;
-              currentPositionAccuracy = position.coords.accuracy;
-              resolve(position);
-            },
+            resolve,
             reject,
             { 
               enableHighAccuracy: false,
@@ -575,11 +621,7 @@ document.addEventListener('DOMContentLoaded', () => {
           cleanup();
           // Se falhar o watch, tenta uma vez com getCurrentPosition
           navigator.geolocation.getCurrentPosition(
-            position => {
-              currentUserPosition = position;
-              currentPositionAccuracy = position.coords.accuracy;
-              resolve(position);
-            },
+            resolve,
             reject,
             { 
               enableHighAccuracy: false,
@@ -597,177 +639,156 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  let isAddressManual = false;
-  let lastManualAddress = '';
-
-  // Mover mapa/marcador e opcionalmente sincronizar por reverse
+  // Atualiza a posição do mapa e do marcador
   async function applyPosition(lat, lng, opts = {}) {
     if (!map) {
       createMap([lat, lng]);
-      // Adiciona botão de localização atual
-      L.control.locate({
-        position: 'topright',
-        strings: {
-          title: "Usar minha localização"
-        },
-        onLocationError: function(err) {
-          console.error('Erro ao obter localização:', err);
-          alert('Não foi possível obter sua localização.');
-        },
-        onLocationOutsideMapBounds: function(context) {
-          alert('Sua localização está fora dos limites do mapa.');
-        },
-        onActivate: async function() {
-          try {
-            const pos = await getCurrentPositionWithTimeout();
-            await applyPosition(pos.coords.latitude, pos.coords.longitude, {reverse: true});
-          } catch(err) {
-            console.error('Erro ao obter localização:', err);
-          }
-        }
-      }).addTo(map);
     } else {
       marker.setLatLng([lat, lng]);
-      map.setView([lat, lng]);
+      map.setView([lat, lng], map.getZoom());
     }
     setCoords(lat, lng);
     
-    // Só faz reverse se for solicitado E não estiver em modo manual
-    if (opts.reverse && !isAddressManual) {
+    // Só faz o reverse se for explicitamente solicitado
+    if (opts.reverse === true) {
       await doReverse(lat, lng);
     }
   }
-  
-  // Configura o modo manual do endereço
-  if (addressEl) {
-    // Quando o usuário digita, ativa o modo manual
-    addressEl.addEventListener('input', (e) => {
-      const value = e.target.value;
-      if (value && value !== lastManualAddress) {
-        isAddressManual = true;
-        lastManualAddress = value;
-      }
-    });
 
-    // Quando o usuário confirma o endereço (pressiona Enter)
-    addressEl.addEventListener('keydown', async (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        const value = addressEl.value;
-        if (value) {
-          await fromAddressInput(value);
+  // Reverse geocoding via API local com tratamento de erros aprimorado
+  async function doReverse(lat, lng) {
+    if (!lat || !lng || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new Error('Coordenadas inválidas');
+    }
+
+    try {
+      coordsEl.value = `${lat},${lng}`;
+      
+      // Não faz nada se já tiver um endereço válido
+      const currentAddress = addressEl.value.trim();
+      if (currentAddress && currentAddress.includes(',')) {
+        return;
+      }
+
+      // Tenta primeiro com zoom alto para precisão
+      const nominatimUrl = `/radci/api/reverse.php?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1`;
+      const response = await fetch(nominatimUrl);
+      if (!response.ok) {
+        throw new Error(`Falha na requisição: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      if (!data || !data.address) {
+        throw new Error('Dados de endereço não encontrados');
+      }
+
+      const address = data.address;
+      let streetName = '';
+      let number = '';
+      
+      // Prioriza tipos de vias mais comuns
+      if (address.road) streetName = address.road;
+      else if (address.highway) streetName = address.highway;
+      else if (address.pedestrian) streetName = address.pedestrian;
+      else if (address.footway) streetName = address.footway;
+      else if (address.street) streetName = address.street;
+      else if (address.path) streetName = address.path;
+      
+      // Adiciona o número se disponível
+      if (address.house_number) {
+        number = address.house_number;
+      }
+
+      // Se não encontrou a rua, tenta com zoom menor
+      if (!streetName) {
+        const nominatimUrlLowerZoom = `/radci/api/reverse.php?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=16&addressdetails=1`;
+        const responseLowerZoom = await fetch(nominatimUrlLowerZoom);
+        if (responseLowerZoom.ok) {
+          const dataLowerZoom = await responseLowerZoom.json();
+          if (dataLowerZoom?.address) {
+            const addressLowerZoom = dataLowerZoom.address;
+            if (addressLowerZoom.road) streetName = addressLowerZoom.road;
+            else if (addressLowerZoom.highway) streetName = addressLowerZoom.highway;
+            else if (addressLowerZoom.pedestrian) streetName = addressLowerZoom.pedestrian;
+            else if (addressLowerZoom.footway) streetName = addressLowerZoom.footway;
+            else if (addressLowerZoom.street) streetName = addressLowerZoom.street;
+            else if (addressLowerZoom.path) streetName = addressLowerZoom.path;
+          }
         }
       }
-    });
-  }
 
-
-  // Reverse geocoding via API local
-  async function doReverse(lat, lng) {
-    try {
-      console.log('Iniciando reverse geocoding para:', lat, lng);
-      
-      // Atualiza imediatamente as coordenadas
-      coordsEl.value = `${lat},${lng}`;
-
-      // Primeiro tenta obter dados do Nominatim
-      const nominatimUrl = `/radci/api/reverse.php?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18`;
-      const nominatimRes = await fetch(nominatimUrl);
-      const nominatimData = await nominatimRes.json();
-      
-      console.log('Dados Nominatim:', nominatimData);
-      
-      if (nominatimData && nominatimData.address) {
-        const addr = nominatimData.address;
+      // Se encontrou um nome de rua válido
+      if (streetName) {
+        const postcode = String(address.postcode || '').replace(/\D/g, '');
         
-        // Extrai o CEP se disponível
-        const postcode = String(addr.postcode || '').replace(/\D/g, '');
-        
-        // Se tiver CEP válido, tenta usar o ViaCEP primeiro
-        if (postcode && postcode.length === 8) {
+        // Se tiver CEP, tenta complementar com dados do ViaCEP
+        if (postcode?.length === 8) {
           try {
-            console.log('Tentando ViaCEP com:', postcode);
             const viacepUrl = `/radci/api/viacep.php?cep=${postcode}`;
             const viacepRes = await fetch(viacepUrl);
-            const viacepData = await viacepRes.json();
-            
-            console.log('Dados ViaCEP:', viacepData);
-            
-            if (viacepData && !viacepData.erro) {
-              // Preenche campos com dados do ViaCEP
-              const fields = {
-                'address': viacepData.logradouro,
-                'bairro': viacepData.bairro,
-                'cidade': viacepData.localidade,
-                'estado': viacepData.uf,
-                'cep': postcode.replace(/(\d{5})(\d{3})/, '$1-$2')
-              };
+            if (viacepRes.ok) {
+              const viacepData = await viacepRes.json();
               
-              // Atualiza cada campo e dispara eventos
-              Object.entries(fields).forEach(([id, value]) => {
-                const el = document.getElementById(id);
-                if (el && value) {
-                  el.value = value;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
+              if (viacepData && !viacepData.erro) {
+                // Usa o nome da rua do ViaCEP se for mais completo
+                if (viacepData.logradouro && viacepData.logradouro.length > streetName.length) {
+                  streetName = viacepData.logradouro;
                 }
-              });
-              
-              // Adiciona o número se disponível do Nominatim
-              if (addr.house_number) {
-                const numberEl = document.getElementById('number');
-                if (numberEl) {
-                  numberEl.value = addr.house_number;
-                  numberEl.dispatchEvent(new Event('input', { bubbles: true }));
-                  numberEl.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Monta o endereço completo
+                const fullAddress = [
+                  streetName + (number ? `, ${number}` : ''),
+                  viacepData.bairro || address.suburb || address.neighbourhood || '',
+                  viacepData.localidade || address.city || address.town || address.municipality || '',
+                  viacepData.uf || (address.state ? address.state.match(/[A-Z]{2}/)?.[0] || address.state : '')
+                ].filter(part => part && part.trim().length > 1).join(', ');
+
+                // Atualiza os campos
+                if (fullAddress.includes(',')) {
+                  addressEl.value = fullAddress;
+                  
+                  const cepField = document.getElementById('cep');
+                  if (cepField) {
+                    cepField.value = viacepData.cep || postcode.replace(/(\d{5})(\d{3})/, '$1-$2');
+                  }
+                  
+                  return;
                 }
               }
-              
-              console.log('Campos preenchidos com sucesso via ViaCEP');
-              return;
             }
           } catch (viacepErr) {
-            console.warn('Erro ao usar ViaCEP:', viacepErr);
+            // Continua com os dados do Nominatim se o ViaCEP falhar
           }
         }
         
-        // Se ViaCEP falhou ou não tinha CEP, usa dados do Nominatim
-        console.log('Usando dados do Nominatim');
-        
-        // Extrai todos os campos possíveis
-        const fields = {
-          'number': addr.house_number || '',
-          'address': [
-            addr.road || addr.street || addr.pedestrian || addr.footway || addr.path,
-            addr.suburb || addr.neighbourhood || addr.quarter || addr.district,
-            addr.city || addr.town || addr.village || addr.municipality,
-            addr.state_code || (addr.state ? addr.state.match(/[A-Z]{2}/)?.[0] || addr.state : '')
-          ].filter(Boolean).join(', '),
-          'bairro': addr.suburb || addr.neighbourhood || addr.quarter || addr.district || '',
-          'cidade': addr.city || addr.town || addr.village || addr.municipality || '',
-          'estado': addr.state_code || (addr.state ? addr.state.match(/[A-Z]{2}/)?.[0] || addr.state : ''),
-          'cep': postcode && postcode.length === 8 ? postcode.replace(/(\d{5})(\d{3})/, '$1-$2') : ''
-        };
-        
-        // Atualiza cada campo e dispara eventos
-        Object.entries(fields).forEach(([id, value]) => {
-          const el = document.getElementById(id);
-          if (el && value) {
-            el.value = value;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+        // Se não conseguiu usar o ViaCEP, monta o endereço com dados do Nominatim
+        const fullAddress = [
+          streetName + (number ? `, ${number}` : ''),
+          address.suburb || address.neighbourhood || address.quarter || address.district || '',
+          address.city || address.town || address.village || address.municipality || '',
+          address.state_code || (address.state ? address.state.match(/[A-Z]{2}/)?.[0] || address.state : '')
+        ].filter(part => part && part.trim().length > 1).join(', ');
+
+        // Só atualiza se encontrou um endereço válido com vírgulas
+        if (fullAddress.includes(',')) {
+          addressEl.value = fullAddress;
+          
+          if (postcode?.length === 8) {
+            const cepField = document.getElementById('cep');
+            if (cepField) {
+              cepField.value = postcode.replace(/(\d{5})(\d{3})/, '$1-$2');
+            }
           }
-        });
-        
-        console.log('Campos preenchidos com sucesso via Nominatim');
-      } else {
-        console.warn('Sem dados de endereço do Nominatim');
+        }
       }
-      
-    } catch (err) {
-      console.warn('Erro no reverse geocoding:', err);
-      // Mantém as coordenadas atualizadas mesmo com erro
+    } catch (error) {
+      // Mantém as coordenadas mesmo em caso de erro
       coordsEl.value = `${lat},${lng}`;
+      
+      // Não mostra erro se já tiver um endereço
+      if (!addressEl.value.trim()) {
+        addressEl.value = '';
+      }
     }
   }
   if (!mapEl || typeof L === 'undefined') {
@@ -795,15 +816,21 @@ document.addEventListener('DOMContentLoaded', () => {
   function formatCepDigits(s) { const d=(s||'').replace(/\D/g,''); return d.length===8?`${d.slice(0,5)}-${d.slice(5)}`:s; }
   function resumir(display_name) { if(!display_name) return ''; const parts=display_name.split(',').map(p=>p.trim()).filter(Boolean); return parts.slice(0,4).join(', '); }
 
-  // Define a criação do mapa ANTES de chamar init()
+  // Cria o mapa e configura os eventos
   function createMap(start) {
-    map = L.map(mapEl).setView(start, 16);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+    map = L.map(mapEl, {
+      attributionControl: false
+    }).setView(start, 16);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+    
     marker = L.marker(start, { draggable: true }).addTo(map);
     setCoords(start[0], start[1]);
     map.invalidateSize();
 
-    // botão "minha localização"
+    // Botão "minha localização"
     const LocateControl = L.control({position: 'topright'});
     LocateControl.onAdd = function() {
       const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
@@ -816,10 +843,9 @@ document.addEventListener('DOMContentLoaded', () => {
       L.DomEvent.on(btn, 'click', L.DomEvent.stop).on(btn, 'click', async () => {
         stopRefine();
         try {
-          const pos = await getCurrentPosition({enableHighAccuracy:true, timeout:10000});
+          const pos = await getCurrentPositionWithTimeout(10000);
           await applyPosition(pos.coords.latitude, pos.coords.longitude, {reverse:true});
         } catch (err) {
-          console.warn('Erro ao obter localização via botão', err);
           alert('Não foi possível obter sua localização.');
         }
       });
@@ -828,9 +854,16 @@ document.addEventListener('DOMContentLoaded', () => {
     LocateControl.addTo(map);
 
     // Interação manual: para refino e faz reverse
-    marker.on('dragend', async () => { stopRefine(); const p = marker.getLatLng(); await applyPosition(p.lat, p.lng, {reverse:true}); });
-    map.on('click', async (e) => { stopRefine(); await applyPosition(e.latlng.lat, e.latlng.lng, {reverse:true}); });
-    map.on('contextmenu', async (e) => { stopRefine(); await applyPosition(e.latlng.lat, e.latlng.lng, {reverse:true}); });
+    marker.on('dragend', async () => { 
+      stopRefine(); 
+      const p = marker.getLatLng(); 
+      await applyPosition(p.lat, p.lng, {reverse:true}); 
+    });
+    
+    map.on('click', async (e) => { 
+      stopRefine(); 
+      await applyPosition(e.latlng.lat, e.latlng.lng, {reverse:true}); 
+    });
   }
 
   // Busca bounding box da cidade/UF para limitar resultados ao perímetro correto
@@ -838,7 +871,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!city || !uf) return null;
       const { id, signal } = newRequest();
       try {
-          const res = await fetch(`./api/geocode.php?q=${encodeURIComponent(`${city}, ${uf} Brasil`)}&limit=1`, { signal });
+          const res = await fetch(`../api/geocode.php?q=${encodeURIComponent(`${city}, ${uf} Brasil`)}&limit=1`, { signal });
           if (id !== lastRequestId) return null;
           const data = await res.json();
           if (Array.isArray(data) && data[0] && data[0].boundingbox) {
@@ -933,18 +966,120 @@ document.addEventListener('DOMContentLoaded', () => {
     return (scored[0] || {}).r || null;
   }
 
-  // Geocodificação via API local (texto livre), com pick refinado
+  // Geocodificação via API local (texto livre), com pick refinado e manutenção da posição do mapa
   async function geocodeAddress(query, expectedPostal = null, expectedCity = '', expectedState = '', expectedStreet = '', expectedNeighbourhood = '') {
     const { id, signal } = newRequest();
     try {
-      const res = await fetch(`./api/geocode.php?q=${encodeURIComponent(query)}&limit=5`, { signal });
+      // Extrai o número do endereço e verifica se é par/ímpar
+      const addressInfo = (() => {
+        const match = query.match(/\b\d+\b/);
+        const isValid = match !== null;
+        const info = {
+          number: isValid ? match[0] : null,
+          isValid,
+          isEven: isValid ? (parseInt(match[0]) % 2 === 0) : null,
+          originalLat: marker ? marker.getLatLng().lat : null,
+          originalLng: marker ? marker.getLatLng().lng : null
+        };
+        return info;
+      })();
+      
+      // Primeiro tenta buscar pelo CEP se disponível
+      const cepMatch = query.match(/\d{5}-?\d{3}/);
+      if (cepMatch) {
+        const cepDigits = cepMatch[0].replace(/\D/g, '');
+        try {
+          const viacepRes = await fetch(`/radci/api/viacep.php?cep=${cepDigits}`, { signal });
+          const viacepData = await viacepRes.json();
+          
+          if (!viacepData.erro) {
+            // Usa o endereço do ViaCEP para uma busca mais precisa
+            const searchQuery = `${viacepData.logradouro}, ${viacepData.bairro}, ${viacepData.localidade}, ${viacepData.uf}`;
+            const res = await fetch(`/radci/api/geocode.php?q=${encodeURIComponent(searchQuery)}&limit=10`, { signal });
+            if (id !== lastRequestId) return null;
+            const results = await res.json();
+            
+            if (Array.isArray(results) && results.length > 0) {
+              // Prioriza resultados do mesmo lado da rua (par/ímpar)
+              if (addressInfo.isEven !== null) {
+                results.forEach(r => {
+                  if (r.address && r.address.house_number) {
+                    const resultNumber = parseInt(r.address.house_number);
+                    const resultIsEven = resultNumber % 2 === 0;
+                    if (resultIsEven === addressInfo.isEven) {
+                      r.importance = (parseFloat(r.importance) || 0) + 2;
+                    }
+                  }
+                });
+              }
+
+              // Adiciona peso extra para resultados que correspondem ao número exato
+              if (addressInfo.isValid) {
+                results.forEach(r => {
+                  if (r.address && r.address.house_number === addressInfo.number) {
+                    r.importance = (parseFloat(r.importance) || 0) + 1;
+                  }
+                });
+              }
+
+              const best = pickBest(results, {
+                expectedPostal: cepDigits,
+                expectedCity: viacepData.localidade,
+                expectedState: viacepData.uf,
+                expectedStreet: viacepData.logradouro,
+                expectedNeighbourhood: viacepData.bairro,
+                expectedHouseNumber: addressInfo.number || '',
+                strictPostal: true
+              });
+              if (best) return best;
+            }
+          }
+        } catch (e) {
+          console.warn('Erro ao buscar CEP:', e);
+        }
+      }
+
+      // Se não encontrou pelo CEP ou não tinha CEP, tenta busca normal
+      const res = await fetch(`/radci/api/geocode.php?q=${encodeURIComponent(query)}&limit=10`, { signal });
       if (id !== lastRequestId) return null;
       const results = await res.json();
       if (!Array.isArray(results) || results.length === 0) return null;
-      const best = pickBest(results, { expectedPostal, expectedCity, expectedState, expectedStreet, expectedNeighbourhood });
+      
+      // Adiciona peso extra para resultados que correspondem ao número exato
+      if (addressInfo.isValid) {
+        results.forEach(r => {
+          if (r.address && r.address.house_number === addressInfo.number) {
+            r.importance = (parseFloat(r.importance) || 0) + 1;
+          }
+        });
+      }
+      
+      const best = pickBest(results, { 
+        expectedPostal, 
+        expectedCity, 
+        expectedState, 
+        expectedStreet, 
+        expectedNeighbourhood,
+        expectedHouseNumber: addressInfo.number || ''
+      });
+      
+      // Se não encontrou o melhor resultado, tenta uma busca mais ampla
+      if (!best) {
+        const broadQuery = query.split(',')[0].trim(); // Usa apenas a primeira parte do endereço
+        const broadRes = await fetch(`/radci/api/geocode.php?q=${encodeURIComponent(broadQuery)}&limit=10`, { signal });
+        if (id !== lastRequestId) return null;
+        const broadResults = await broadRes.json();
+        if (Array.isArray(broadResults) && broadResults.length > 0) {
+          return pickBest(broadResults, {
+            expectedStreet: broadQuery,
+            expectedHouseNumber: addressInfo.number || ''
+          });
+        }
+      }
+      
       return best || results[0];
     } catch (err) {
-      if (err.name !== 'AbortError') return null;
+      if (err.name !== 'AbortError') console.error('Erro na geocodificação:', err);
       return null;
     }
   }
@@ -959,19 +1094,26 @@ document.addEventListener('DOMContentLoaded', () => {
       const { id, signal } = newRequest();
   
       // ViaCEP → estrutura, com fallback se falhar (ex.: 502)
-      const via = await fetch(`./api/viacep.php?cep=${encodeURIComponent(cepDigits)}`, { signal });
+      const via = await fetch(`/radci/api/viacep.php?cep=${encodeURIComponent(cepDigits)}`, { signal });
       if (!via.ok) {
-        const uPostal = `./api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br&limit=10`;
+        const uPostal = `/radci/api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br&limit=10`;
         const rPostal = await (await fetch(uPostal, { signal })).json();
         if (id !== lastRequestId) return;
         const bestPostal = pickBest(rPostal, { expectedPostal: cepDigits });
         if (bestPostal && bestPostal.lat && bestPostal.lon) {
-          isAddressManual = false; // Permite atualização do endereço
-          await applyPosition(parseFloat(bestPostal.lat), parseFloat(bestPostal.lon), { reverse: true });
+          const lat = parseFloat(bestPostal.lat);
+          const lng = parseFloat(bestPostal.lon);
+          
+          // Atualiza o mapa e o marcador
+          map.setView([lat, lng], 17);
+          marker.setLatLng([lat, lng]);
+          coordsEl.value = `${lat},${lng}`;
+          map.invalidateSize();
+          
           cepEl.value = formatCepDigits(cepDigits);
           return;
         }
-        alert(`CEP não encontrado. Por favor, verifique o número informado.`);
+        console.error(`Erro ao consultar ViaCEP (HTTP ${via.status}).`);
         return;
       }
   
@@ -992,7 +1134,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const vbParam = bounds?.viewbox ? `&viewbox=${encodeURIComponent(bounds.viewbox)}&bounded=1` : '';
   
       // 1) street+postalcode+city+state com perímetro + BR
-      const u1 = `./api/geocode.php?street=${encodeURIComponent(rua)}&postalcode=${encodeURIComponent(cepDigits)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
+      const u1 = `/radci/api/geocode.php?street=${encodeURIComponent(rua)}&postalcode=${encodeURIComponent(cepDigits)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
       const r1 = await (await fetch(u1, { signal })).json();
       if (id !== lastRequestId) return;
       let best = pickBest(r1, {
@@ -1008,7 +1150,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
       // 2) postalcode puro com perímetro + BR
       if (!best) {
-        const u2 = `./api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br${vbParam}&limit=10`;
+        const u2 = `/radci/api/geocode.php?postalcode=${encodeURIComponent(cepDigits)}&countrycodes=br${vbParam}&limit=10`;
         const r2 = await (await fetch(u2, { signal })).json();
         if (id !== lastRequestId) return;
         best = pickBest(r2, {
@@ -1034,27 +1176,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Endereço → busca estruturada limitada por cidade/UF; fallback centro da cidade
   async function fromAddressInput(q) {
+    stopRefine();
     if (!q || q.trim().length < 4) return;
-    
     try {
-      // Busca coordenadas do endereço completo primeiro
-      try {
-        const geocodeResult = await fetch(`./api/geocode.php?address=${encodeURIComponent(q)}`).then(async r => {
-          if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
-          const data = await r.json();
-          return data;
-        });
-        if (geocodeResult && geocodeResult.length === 2) {
-          await applyPosition(geocodeResult, false);
-          lastManualAddress = q;
-          addressInputEl.value = q;
-          return;
+      console.log('Buscando endereço:', q);
+      
+      // Tenta primeiro uma busca direta do endereço completo
+      const directSearch = await fetch(`/radci/api/geocode.php?q=${encodeURIComponent(q)}&limit=1`);
+      const directResult = await directSearch.json();
+      
+      if (directResult && directResult[0] && directResult[0].lat && directResult[0].lon) {
+        const lat = parseFloat(directResult[0].lat);
+        const lng = parseFloat(directResult[0].lon);
+        
+        console.log('Encontrado diretamente:', lat, lng);
+        
+        // Atualiza o mapa e o marcador
+        map.setView([lat, lng], 17);
+        marker.setLatLng([lat, lng]);
+        coordsEl.value = `${lat},${lng}`;
+        map.invalidateSize();
+        
+        // Busca informações detalhadas do endereço
+        const reverseData = await fetch(`/radci/api/reverse.php?lat=${lat}&lon=${lng}`);
+        const addressInfo = await reverseData.json();
+        
+        if (addressInfo && addressInfo.address) {
+          if (addressInfo.address.postcode) {
+            cepEl.value = formatCepDigits(addressInfo.address.postcode);
+          }
         }
-      } catch (geocodeError) {
-        console.error('Erro ao geocodificar endereço completo:', geocodeError);
+        
+        return;
       }
       
-      // Se não conseguir, tenta parse estruturado
+      // Se não encontrou diretamente, tenta parse estruturado
       const partsDash = q.split(' - ');
       const left = (partsDash[0] || '').trim();
       const right = (partsDash[1] || '').trim();
@@ -1081,7 +1237,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const { id, signal } = newRequest();
 
       // 1) estruturado com perímetro + country br
-      const url1 = `./api/geocode.php?street=${encodeURIComponent(streetQuery)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
+      const url1 = `/radci/api/geocode.php?street=${encodeURIComponent(streetQuery)}&city=${encodeURIComponent(cidade)}&state=${encodeURIComponent(uf)}&countrycodes=br${vbParam}&limit=10`;
       const r1 = await (await fetch(url1, { signal })).json();
       if (id !== lastRequestId) return;
 
@@ -1097,7 +1253,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // 2) fallback livre no perímetro
       if (!found) {
         const free = `${streetQuery} - ${bairro ? bairro + ', ' : ''}${cidade}, ${uf} Brasil`;
-        const url2 = `./api/geocode.php?q=${encodeURIComponent(free)}&countrycodes=br${vbParam}&limit=10`;
+        const url2 = `/radci/api/geocode.php?q=${encodeURIComponent(free)}&countrycodes=br${vbParam}&limit=10`;
         const r2 = await (await fetch(url2, { signal })).json();
         if (id !== lastRequestId) return;
         found = pickBest(r2, {
@@ -1111,9 +1267,37 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (found && found.lat && found.lon) {
-        await applyPosition(parseFloat(found.lat), parseFloat(found.lon), { reverse: true });
+        const lat = parseFloat(found.lat);
+        const lng = parseFloat(found.lon);
+        
+        // Atualiza o mapa e o marcador
+      map.setView([lat, lng], 17);
+      marker.setLatLng([lat, lng]);
+      coordsEl.value = `${lat},${lng}`;
+      map.invalidateSize();
+      
+      // Remove qualquer mensagem de erro anterior
+      const errorDiv = document.querySelector('.error-message');
+      if (errorDiv) {
+        errorDiv.remove();
+      }
+      
+      // Busca o CEP da localização
+      const reverseUrl = `/radci/api/reverse.php?lat=${lat}&lon=${lng}`;
+      const reverseResponse = await fetch(reverseUrl, { signal });
+      const reverseData = await reverseResponse.json();
+      
+      if (reverseData && reverseData.address && reverseData.address.postcode) {
+        cepEl.value = formatCepDigits(reverseData.address.postcode);
+      }
+      
+      // Não mostra mensagem de erro se temos coordenadas válidas
+      return true;
       } else if (bounds && Number.isFinite(bounds.centerLat) && Number.isFinite(bounds.centerLon)) {
-        await applyPosition(bounds.centerLat, bounds.centerLon, { reverse: true });
+        map.setView([bounds.centerLat, bounds.centerLon], 13);
+        marker.setLatLng([bounds.centerLat, bounds.centerLon]);
+        coordsEl.value = `${bounds.centerLat},${bounds.centerLon}`;
+        map.invalidateSize();
       } else {
         alert('Endereço não encontrado no mapa.');
       }
@@ -1122,142 +1306,122 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Eventos CEP/Endereço com controle manual
+  // Eventos CEP/Endereço (param o refino e reposicionam)
+  let cepTimer = null;
   cepEl.addEventListener('input', (e) => {
     const raw = e.target.value.replace(/\D/g,'');
     e.target.value = formatCepDigits(raw);
-    cepChangedByUser = true;
-    isAddressManual = false; // Permite atualização quando mudar CEP
+    
+    // Se tiver 8 dígitos, inicia a busca após um pequeno delay
+    if (raw.length === 8) {
+      if (cepTimer) clearTimeout(cepTimer);
+      cepTimer = setTimeout(async () => {
+        await fromCepInput(e.target.value);
+        lastCepFetchedDigits = raw;
+      }, 500);
+    }
   });
 
   cepEl.addEventListener('blur', async (e) => {
     const digits = (e.target.value || '').replace(/\D/g,'');
-    if (!cepChangedByUser) return;
-    if (digits.length !== 8) { cepChangedByUser = false; return; }
-    if (digits === lastCepFetchedDigits) { cepChangedByUser = false; return; }
-    isAddressManual = false; // Permite atualização do endereço
-    await fromCepInput(e.target.value);
-    lastCepFetchedDigits = digits;
-    cepChangedByUser = false;
+    if (digits.length === 8 && digits !== lastCepFetchedDigits) {
+      await fromCepInput(e.target.value);
+      lastCepFetchedDigits = digits;
+    }
   });
 
   cepEl.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const digits = (cepEl.value || '').replace(/\D/g,'');
-      if (digits.length !== 8) return;
-      isAddressManual = false; // Permite atualização do endereço
-      await fromCepInput(cepEl.value);
-      lastCepFetchedDigits = digits;
-      cepChangedByUser = false;
-    }
-  });
-
-  // Evento para o campo de CEP com formatação automática
-  cepEl.addEventListener('input', (e) => {
-    let value = e.target.value.replace(/\D/g, '');
-    if (value.length > 8) value = value.slice(0, 8);
-    e.target.value = value.replace(/^(\d{5})(\d)/, '$1-$2');
-    
-    if (value.length === 8) {
-      fromCepInput(value);
+      if (digits.length === 8) {
+        await fromCepInput(cepEl.value);
+        lastCepFetchedDigits = digits;
+      }
     }
   });
 
   let addrTimer = null;
   addressEl.addEventListener('input', (e) => {
-    const q = e.target.value.trim();
-    isAddressManual = true; // Marca como endereço manual
-    if (addrTimer) clearTimeout(addrTimer);
-    addrTimer = setTimeout(async () => {
-      if (q) {
-        isAddressManual = false; // Permite atualização após delay
+    const q = e.target.value;
+    if (q.trim().length >= 5) {
+      if (addrTimer) clearTimeout(addrTimer);
+      addrTimer = setTimeout(async () => {
         await fromAddressInput(q);
-        lastManualAddress = q;
-      }
-    }, 600);
+      }, 500);
+    }
   });
-  
+
+  addressEl.addEventListener('blur', async (e) => {
+    const q = e.target.value;
+    if (q.trim().length >= 5) {
+      await fromAddressInput(q);
+    }
+  });
+
   addressEl.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      isAddressManual = false;
-      await fromAddressInput(addressEl.value);
-      lastManualAddress = addressEl.value;
+      const q = e.target.value;
+      if (q.trim().length >= 5) {
+        await fromAddressInput(q);
+      }
     }
   });
 
   // Inicialização do mapa e localização
   (async function init() {
     try {
-      // Verifica se tem categoria na URL
-      const urlParams = new URLSearchParams(window.location.search);
-      const categoryId = urlParams.get('categoryId');
-      
-      // Se não tem categoria e não está no seletor, mostra o seletor
-      if (!categoryId && !document.getElementById('categorySelector')) {
-        const categories = [
-          {id: 'saude', name: 'Saúde'},
-          {id: 'inovacao', name: 'Inovação'},
-          {id: 'mobilidade', name: 'Mobilidade'},
-          {id: 'politicas', name: 'Políticas Públicas'},
-          {id: 'riscos', name: 'Riscos Urbanos'},
-          {id: 'sustentabilidade', name: 'Sustentabilidade'},
-          {id: 'planejamento', name: 'Planejamento Urbano'},
-          {id: 'educacao', name: 'Educação'},
-          {id: 'meio', name: 'Meio Ambiente'},
-          {id: 'infraestrutura', name: 'Infraestrutura da Cidade'},
-          {id: 'seguranca', name: 'Segurança Pública'},
-          {id: 'energias', name: 'Energias Inteligentes'}
-        ];
-        
-        const selectorHtml = `
-          <div class="mb-4">
-            <label for="categorySelector" class="block text-sm font-medium text-gray-700 mb-1">
-              Selecione a categoria da ocorrência
-            </label>
-            <select id="categorySelector" name="categoryId" class="w-full rounded-md border border-gray-300 px-3 py-2" required>
-              <option value="">Selecione uma categoria</option>
-              ${categories.map(cat => `<option value="${cat.id}">${cat.name}</option>`).join('')}
-            </select>
-          </div>
-        `;
-        
-        const formEl = document.querySelector('form');
-        if (formEl) {
-          formEl.insertAdjacentHTML('afterbegin', selectorHtml);
-        }
-      }
-
       // Primeiro cria o mapa com uma posição temporária
       createMap(DEFAULT);
       
-      // Tenta recuperar coordenadas salvas
-      const savedCoords = coordsEl.value.split(',').map(Number);
-      if (savedCoords.length === 2 && isFinite(savedCoords[0]) && isFinite(savedCoords[1])) {
-        await applyPosition(savedCoords[0], savedCoords[1], { reverse: true });
-        return;
-      }
-      
-      // Se não tem coordenadas salvas, tenta obter localização atual
       console.log('Solicitando permissão de localização...');
       
-      const position = await getCurrentPosition({
+      // Solicita permissão explicitamente
+      if (navigator.permissions && navigator.permissions.query) {
+        const permission = await navigator.permissions.query({ name: 'geolocation' });
+        if (permission.state === 'denied') {
+          throw new Error('Permissão de localização negada');
+        }
+      }
+      
+      console.log('Obtendo localização precisa...');
+      
+      // Configura para alta precisão
+      const options = {
         enableHighAccuracy: true,
         timeout: 10000,
         maximumAge: 0
+      };
+      
+      // Tenta obter a localização atual
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
       });
+      
+      console.log('Localização obtida:', position);
       
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
       
       // Verifica se as coordenadas são válidas
       if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
         throw new Error('Coordenadas inválidas');
       }
       
-      // Atualiza posição e obtém endereço
-      await applyPosition(lat, lng, { reverse: true });
+      console.log('Coordenadas válidas:', lat, lng);
+      
+      // Atualiza o mapa para a posição atual
+      map.setView([lat, lng], 18, { animate: false });
+      marker.setLatLng([lat, lng]);
+      
+      // Atualiza o campo de coordenadas
+      coordsEl.value = `${lat},${lng}`;
+      
+      // Tenta obter os dados do endereço
+      console.log('Obtendo dados do endereço...');
+      await doReverse(lat, lng);
       
       // Atualiza o indicador de precisão
       const accBadge = document.getElementById('gpsBadge');
@@ -1331,25 +1495,47 @@ document.addEventListener('DOMContentLoaded', () => {
 </head>
 
 
-<body class="min-h-screen bg-gray-100 pb-20">
+<body class="min-h-screen bg-gray-100">
   <header class="bg-white border-b border-gray-200">
     <div class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <a href="dashboard.php" class="inline-flex items-center text-green-600 font-medium hover:text-green-800">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-        </svg>
-        Voltar
-      </a>
+      <form method="POST" class="m-0">
+        <input type="hidden" name="step" value="<?= $step ?>" />
+        <button type="submit" name="navigate" value="back" class="inline-flex items-center text-green-600 font-medium hover:text-green-800">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Voltar
+        </button>
+      </form>
     </div>
   </header>
 
-  <main class="container mx-auto max-w-screen-lg px-4 py-4">
+  <main class="container mx-auto max-w-screen-lg px-4 py-4 pb-24">
     <?php if($step === 1): ?>
       <div class="bg-white rounded-xl shadow p-6">
         <h1 class="text-2xl font-bold mb-4">Passo 1 — Localização</h1>
         <form method="POST" class="space-y-4">
           <input type="hidden" name="step" value="1" />
           <input type="hidden" id="coordinates" name="coordinates" value="<?= htmlspecialchars(is_array($data['coordinates'] ?? null) ? implode(',', $data['coordinates']) : '') ?>" />
+
+        <div class="mb-4">
+          <label for="type" class="block text-sm font-medium text-gray-700">Categoria da Ocorrência</label>
+          <select id="type" name="type" class="mt-1 w-full rounded-md border-gray-300">
+            <option value="">Selecione uma categoria</option>
+            <option value="saude" <?= ($data['type'] ?? '') === 'saude' ? 'selected' : '' ?>>Saúde</option>
+            <option value="inovacao" <?= ($data['type'] ?? '') === 'inovacao' ? 'selected' : '' ?>>Inovação</option>
+            <option value="mobilidade" <?= ($data['type'] ?? '') === 'mobilidade' ? 'selected' : '' ?>>Mobilidade</option>
+            <option value="politicas" <?= ($data['type'] ?? '') === 'politicas' ? 'selected' : '' ?>>Políticas Públicas</option>
+            <option value="riscos" <?= ($data['type'] ?? '') === 'riscos' ? 'selected' : '' ?>>Riscos Urbanos</option>
+            <option value="sustentabilidade" <?= ($data['type'] ?? '') === 'sustentabilidade' ? 'selected' : '' ?>>Sustentabilidade</option>
+            <option value="planejamento" <?= ($data['type'] ?? '') === 'planejamento' ? 'selected' : '' ?>>Planejamento Urbano</option>
+            <option value="educacao" <?= ($data['type'] ?? '') === 'educacao' ? 'selected' : '' ?>>Educação</option>
+            <option value="meio" <?= ($data['type'] ?? '') === 'meio' ? 'selected' : '' ?>>Meio Ambiente</option>
+            <option value="infraestrutura" <?= ($data['type'] ?? '') === 'infraestrutura' ? 'selected' : '' ?>>Infraestrutura</option>
+            <option value="seguranca" <?= ($data['type'] ?? '') === 'seguranca' ? 'selected' : '' ?>>Segurança Pública</option>
+            <option value="energias" <?= ($data['type'] ?? '') === 'energias' ? 'selected' : '' ?>>Energias Inteligentes</option>
+          </select>
+        </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div class="md:col-span-2">
@@ -1425,6 +1611,9 @@ document.addEventListener('DOMContentLoaded', () => {
               <button type="button" id="btnSelectFiles" class="mt-4 bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700">Selecionar Arquivos</button>
               <input id="fileInput" type="file" name="files[]" multiple accept="image/*,video/*" class="hidden" />
             </div>
+            
+            <!-- Área de pré-visualização -->
+            <div id="previewArea" class="mt-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"></div>
           </div>
     
           <div class="flex justify-between">
@@ -1442,6 +1631,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div><strong>CEP:</strong> <?= htmlspecialchars($data['cep'] ?? '') ?></div>
         <div><strong>Tipo:</strong> <?= htmlspecialchars($data['type'] ?? '') ?></div>
         <div><strong>Descrição:</strong> <?= nl2br(htmlspecialchars($data['description'] ?? '')) ?></div>
+        <div><strong>Coordenadas:</strong> <?= implode(', ', array_map('number_format', $data['coordinates'] ?? [0,0], [6,6])) ?></div>
       </div>
 
       <div class="bg-white rounded-xl shadow p-4 mb-6">
@@ -1487,19 +1677,41 @@ document.addEventListener('DOMContentLoaded', () => {
       <?php $files = $data['preview_files'] ?? []; if(!empty($files)): ?>
       <div class="bg-white rounded-xl shadow p-4 mb-6">
         <h2 class="text-lg font-semibold mb-2">Mídia</h2>
-        <div class="flex overflow-x-auto gap-4 pb-4" style="scroll-snap-type: x mandatory;">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           <?php foreach($files as $f): 
             $url = htmlspecialchars($f['url'] ?? '');
             $type = (strpos($f['type'] ?? '', 'video') !== false) ? 'video' : 'image';
+            $name = htmlspecialchars($f['name'] ?? '');
+            $mime = htmlspecialchars($f['type'] ?? '');
           ?>
-            <div class="cursor-pointer min-w-[200px] max-w-[200px] flex-shrink-0" style="scroll-snap-align: start;" data-media-url="<?= $url ?>" data-media-type="<?= $type ?>" data-media-mime="<?= htmlspecialchars($f['type'] ?? '') ?>">
+            <div class="cursor-pointer relative aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-80 transition-opacity" 
+                 onclick="openMedia('<?= $url ?>', '<?= $type ?>', '<?= $mime ?>', '<?= $name ?>')"
+                 data-media-url="<?= $url ?>" 
+                 data-media-type="<?= $type ?>" 
+                 data-media-mime="<?= $mime ?>"
+                 data-media-name="<?= $name ?>">
               <?php if($type === 'image'): ?>
-                <img src="<?= $url ?>" class="w-full h-32 object-cover rounded hover:opacity-80 transition-opacity" alt="<?= htmlspecialchars($f['name'] ?? '') ?>">
+                <img src="<?= $url ?>" 
+                     class="w-full h-full object-cover" 
+                     alt="<?= $name ?>">
               <?php else: ?>
-                <video class="w-full h-32 object-cover rounded hover:opacity-80 transition-opacity" muted>
-                  <source src="<?= $url ?>" type="<?= htmlspecialchars($f['type'] ?? '') ?>">
-                </video>
+                <div class="w-full h-full bg-gray-800">
+                  <!-- Ícone de play para vídeos -->
+                  <div class="absolute inset-0 flex items-center justify-center bg-black/30">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 text-white" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                  </div>
+                  <!-- Indicador de vídeo -->
+                  <div class="absolute top-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
+                    Vídeo
+                  </div>
+                </div>
               <?php endif; ?>
+              <!-- Nome do arquivo -->
+              <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-2 truncate">
+                <?= $name ?>
+              </div>
             </div>
           <?php endforeach; ?>
         </div>
@@ -1512,13 +1724,43 @@ document.addEventListener('DOMContentLoaded', () => {
         <button type="submit" class="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700">Finalizar</button>
       </form>
 
-      <div id="mediaModal" class="fixed inset-0 bg-black/60 hidden z-40 items-center justify-center p-4">
-        <div class="bg-white w-full max-w-2xl rounded-xl overflow-hidden shadow-xl relative">
-          <button id="mediaClose" class="absolute top-3 right-3 text-gray-500 hover:text-gray-700 text-2xl px-3 py-1" aria-label="Fechar">&times;</button>
-          <img id="modalImage" class="w-full h-96 object-cover" style="display:none" alt="Pré-visualização de imagem" />
-          <video id="modalVideo" class="w-full h-96 object-cover" style="display:none" controls>
-            <source id="modalVideoSource" src="" type="">
-          </video>
+      <!-- Modal de mídia -->
+      <div id="mediaModal" class="fixed inset-0 bg-black/90 hidden z-[9999]">
+        <div class="relative w-full h-full flex flex-col items-center justify-center p-4">
+          <!-- Botão fechar -->
+          <button id="mediaClose" class="absolute top-4 right-4 text-white hover:text-gray-300 z-50 p-2" aria-label="Fechar">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+
+          <!-- Nome do arquivo -->
+          <div id="mediaName" class="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded z-50 text-sm font-medium"></div>
+
+          <!-- Container de mídia -->
+          <div class="relative w-full h-full flex items-center justify-center">
+            <img id="modalImage" class="max-h-[90vh] max-w-[90vw] object-contain hidden" alt="Pré-visualização de imagem" />
+            <video id="modalVideo" class="max-h-[90vh] max-w-[90vw] hidden" controls controlsList="nodownload" playsinline preload="auto">
+              <source id="modalVideoSource" src="" type="">
+              <p class="text-white">Seu navegador não suporta a reprodução de vídeos.</p>
+            </video>
+          </div>
+
+          <!-- Navegação -->
+          <div class="absolute inset-y-0 left-0 flex items-center">
+            <button id="prevMedia" class="p-2 text-white hover:text-gray-300 focus:outline-none">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+          </div>
+          <div class="absolute inset-y-0 right-0 flex items-center">
+            <button id="nextMedia" class="p-2 text-white hover:text-gray-300 focus:outline-none">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     <?php endif; ?>
@@ -1576,27 +1818,134 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function updateFileInfo(files) {
     fileError.textContent = '';
+    const previewArea = document.getElementById('previewArea');
+    previewArea.innerHTML = ''; // Limpa previews anteriores
     
     if (files.length === 0) {
       fileInfo.textContent = 'Arraste arquivos ou clique para selecionar';
       return;
     }
 
-    // Validação de arquivos - REMOVIDA LIMITAÇÃO DE TAMANHO
+    // Validação de arquivos
     const allowedTypes = ['image/', 'video/'];
+    const maxFileSize = 100 * 1024 * 1024; // 100MB por arquivo
     let validFiles = 0;
     let errors = [];
 
     for (let file of files) {
-      // Removida validação de tamanho - aceita qualquer tamanho
-      
       const isValidType = allowedTypes.some(type => file.type.startsWith(type));
       if (!isValidType) {
         errors.push(`${file.name}: tipo não suportado`);
         continue;
       }
+
+      if (file.size > maxFileSize) {
+        errors.push(`${file.name}: arquivo muito grande (máximo 100MB)`);
+        continue;
+      }
       
       validFiles++;
+      
+      // Criar elemento de pré-visualização
+      const previewContainer = document.createElement('div');
+      previewContainer.className = 'relative aspect-square rounded-lg overflow-hidden bg-gray-100 cursor-pointer';
+      previewContainer.setAttribute('data-media-url', URL.createObjectURL(file));
+      previewContainer.setAttribute('data-media-type', 'image');
+      previewContainer.setAttribute('data-media-mime', file.type);
+      previewContainer.setAttribute('data-media-name', file.name);
+      
+      if (file.type.startsWith('image/')) {
+        // Pré-visualização de imagem
+        const img = document.createElement('img');
+        img.className = 'w-full h-full object-cover hover:opacity-80 transition-opacity';
+        img.alt = file.name;
+        
+        // Usar URL.createObjectURL para pré-visualização
+        const url = URL.createObjectURL(file);
+        img.src = url;
+        
+        // Limpar URL quando a imagem carregar
+        img.onload = () => URL.revokeObjectURL(url);
+        
+        previewContainer.appendChild(img);
+        
+        // Adicionar evento de clique para visualizar imagem
+        previewContainer.addEventListener('click', () => {
+          const modal = document.createElement('div');
+          modal.className = 'fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4';
+          modal.innerHTML = `
+            <div class="relative max-w-4xl w-full">
+              <button class="absolute -top-10 right-0 text-white hover:text-gray-300">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <img src="${url}" class="max-h-[90vh] max-w-full object-contain mx-auto" alt="${file.name}">
+            </div>
+          `;
+          document.body.appendChild(modal);
+          
+          // Fechar modal
+          modal.addEventListener('click', (e) => {
+            if (e.target === modal || e.target.closest('button')) {
+              modal.remove();
+            }
+          });
+        });
+      } else if (file.type.startsWith('video/')) {
+        // Pré-visualização de vídeo
+        const video = document.createElement('video');
+        video.className = 'w-full h-full object-cover';
+        video.muted = true;
+        
+        const url = URL.createObjectURL(file);
+        video.src = url;
+        
+        // Limpar URL quando o vídeo carregar
+        video.onloadedmetadata = () => {
+          video.currentTime = 0;
+        };
+        
+        // Ícone de vídeo sobreposto
+        const videoIcon = document.createElement('div');
+        videoIcon.className = 'absolute inset-0 flex items-center justify-center bg-black/30';
+        videoIcon.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 text-white" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+        `;
+        
+        previewContainer.appendChild(video);
+        previewContainer.appendChild(videoIcon);
+        
+        // Adicionar evento de clique para reproduzir vídeo
+        previewContainer.addEventListener('click', () => {
+          const modal = document.createElement('div');
+          modal.className = 'fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4';
+          modal.innerHTML = `
+            <div class="relative max-w-4xl w-full">
+              <button class="absolute -top-10 right-0 text-white hover:text-gray-300">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <video src="${url}" class="max-h-[90vh] max-w-full mx-auto" controls autoplay></video>
+            </div>
+          `;
+          document.body.appendChild(modal);
+          
+          // Fechar modal
+          modal.addEventListener('click', (e) => {
+            if (e.target === modal || e.target.closest('button')) {
+              const video = modal.querySelector('video');
+              video.pause();
+              modal.remove();
+            }
+          });
+        });
+      }
+      
+      previewArea.appendChild(previewContainer);
     }
 
     if (errors.length > 0) {
@@ -1618,44 +1967,157 @@ document.addEventListener('DOMContentLoaded', function() {
   const modalVideo = document.getElementById('modalVideo');
   const modalVideoSource = document.getElementById('modalVideoSource');
   const mediaClose = document.getElementById('mediaClose');
+  const prevMedia = document.getElementById('prevMedia');
+  const nextMedia = document.getElementById('nextMedia');
+  const mediaName = document.getElementById('mediaName');
 
   if (mediaModal) {
+    let currentMediaIndex = 0;
+    let mediaItems = [];
+
     // Clique em mídia para abrir modal
-    document.querySelectorAll('[data-media-url]').forEach(item => {
+    document.querySelectorAll('[data-media-url]').forEach((item, index) => {
       item.addEventListener('click', () => {
-        const url = item.dataset.mediaUrl;
-        const type = item.dataset.mediaType;
-        const mime = item.dataset.mediaMime;
-
-        if (type === 'image') {
-          modalImage.src = url;
-          modalImage.style.display = 'block';
-          modalVideo.style.display = 'none';
-        } else {
-          modalVideoSource.src = url;
-          modalVideoSource.type = mime;
-          modalVideo.load();
-          modalVideo.style.display = 'block';
-          modalImage.style.display = 'none';
-        }
-
-        mediaModal.classList.remove('hidden');
-        mediaModal.classList.add('flex');
+        mediaItems = Array.from(document.querySelectorAll('[data-media-url]'));
+        currentMediaIndex = index;
+        showMedia(currentMediaIndex);
       });
     });
 
-    // Fechar modal
-    mediaClose.addEventListener('click', () => {
+    function showMedia(index) {
+      const item = mediaItems[index];
+      const url = item.dataset.mediaUrl;
+      const type = item.dataset.mediaType;
+      const mime = item.dataset.mediaMime;
+      const name = item.dataset.mediaName;
+
+      console.log('Abrindo mídia:', { url, type, mime, name });
+
+      // Atualiza nome do arquivo
+      mediaName.textContent = name;
+
+      // Reseta estado
+      modalImage.classList.add('hidden');
+      modalVideo.classList.add('hidden');
+      modalVideo.pause();
+      modalVideo.currentTime = 0;
+
+      if (type === 'image') {
+        modalImage.src = url;
+        modalImage.classList.remove('hidden');
+      } else {
+        // Configura o vídeo
+        modalVideoSource.src = url;
+        modalVideoSource.type = mime;
+        
+        // Remove event listeners anteriores para evitar duplicação
+        modalVideo.removeEventListener('loadedmetadata', onVideoLoad);
+        modalVideo.removeEventListener('error', onVideoError);
+        
+        // Adiciona event listeners
+        modalVideo.addEventListener('loadedmetadata', onVideoLoad);
+        modalVideo.addEventListener('error', onVideoError);
+        
+        // Carrega e exibe o vídeo
+        modalVideo.load();
+        modalVideo.classList.remove('hidden');
+        
+        console.log('Configurando vídeo:', { src: url, type: mime });
+      }
+
+      // Atualiza visibilidade dos botões de navegação
+      prevMedia.style.visibility = index > 0 ? 'visible' : 'hidden';
+      nextMedia.style.visibility = index < mediaItems.length - 1 ? 'visible' : 'hidden';
+
+      mediaModal.classList.remove('hidden');
+      mediaModal.classList.add('flex');
+    }
+
+    function onVideoLoad() {
+      console.log('Vídeo carregado com sucesso:', {
+        duration: this.duration,
+        readyState: this.readyState,
+        networkState: this.networkState
+      });
+      this.play().catch(e => console.error('Erro ao iniciar reprodução:', e));
+    }
+
+    function onVideoError(e) {
+      console.error('Erro ao carregar vídeo:', {
+        error: this.error,
+        networkState: this.networkState,
+        event: e
+      });
+      alert('Erro ao carregar o vídeo. Por favor, tente novamente.');
+    }
+
+    // Navegação
+    prevMedia.addEventListener('click', () => {
+      if (currentMediaIndex > 0) {
+        currentMediaIndex--;
+        showMedia(currentMediaIndex);
+      }
+    });
+
+    nextMedia.addEventListener('click', () => {
+      if (currentMediaIndex < mediaItems.length - 1) {
+        currentMediaIndex++;
+        showMedia(currentMediaIndex);
+      }
+    });
+
+    // Navegação por teclado
+    document.addEventListener('keydown', (e) => {
+      if (!mediaModal.classList.contains('hidden')) {
+        if (e.key === 'ArrowLeft' && currentMediaIndex > 0) {
+          currentMediaIndex--;
+          showMedia(currentMediaIndex);
+        } else if (e.key === 'ArrowRight' && currentMediaIndex < mediaItems.length - 1) {
+          currentMediaIndex++;
+          showMedia(currentMediaIndex);
+        } else if (e.key === 'Escape') {
+          closeModal();
+        }
+      }
+    });
+
+    function closeModal() {
+      console.log('Fechando modal e limpando mídia');
+      
+      // Pausa e limpa o vídeo
+      if (modalVideo) {
+        modalVideo.pause();
+        modalVideo.currentTime = 0;
+        modalVideoSource.removeAttribute('src');
+        modalVideo.load(); // Importante: limpa o buffer do vídeo
+        modalVideo.classList.add('hidden');
+      }
+      
+      // Limpa a imagem
+      if (modalImage) {
+        modalImage.src = '';
+        modalImage.classList.add('hidden');
+      }
+      
+      // Remove event listeners do vídeo
+      modalVideo.removeEventListener('loadedmetadata', onVideoLoad);
+      modalVideo.removeEventListener('error', onVideoError);
+      
+      // Esconde o modal
       mediaModal.classList.add('hidden');
       mediaModal.classList.remove('flex');
-      modalVideo.pause();
+      
+      console.log('Modal fechado e mídia limpa com sucesso');
+    }
+
+    // Fechar modal
+    mediaClose.addEventListener('click', () => {
+      closeModal();
     });
 
     mediaModal.addEventListener('click', (e) => {
       if (e.target === mediaModal) {
-        mediaModal.classList.add('hidden');
-        mediaModal.classList.remove('flex');
-        modalVideo.pause();
+        closeModal();
       }
     });
   }
