@@ -241,12 +241,13 @@ foreach ($ocorrencias as $o) {
   ?>
 
   /* NAV MOBILE */
+.mobile-nav { background-color: #ffffff; }
 .mobile-nav .nav-item {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  color: #6b7280; /* cinza */
+  color: #065f46; /* verde escuro */
   transition: all 0.2s ease;
 }
 
@@ -255,13 +256,13 @@ foreach ($ocorrencias as $o) {
 }
 
 .mobile-nav .nav-item.active {
-  color: #00875A; /* verde do RADCI */
+  color: #065f46; /* verde escuro */
   font-weight: 600;
   transform: translateY(-2px);
 }
 
 .mobile-nav .nav-item:hover {
-  color: #00875A;
+  color: #065f46;
   transform: translateY(-2px);
 }
 
@@ -1078,12 +1079,12 @@ foreach ($ocorrencias as $o) {
 
 
 
-  <!-- Categorias de ocorrências (desktop) -->
+  <!-- Categorias de ocorrências (desktop/horizontal) -->
   <section class="mb-4 block">
     <h3 class="text-lg font-bold mb-2">Registre Ocorrências</h3>
     <div class="relative">
       <button type="button" id="catPrev"
-              class="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white"
+              class="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-white border border-gray-200 shadow rounded-full p-2 hover:bg-white"
               aria-label="Anterior">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
@@ -1109,7 +1110,7 @@ foreach ($ocorrencias as $o) {
       </div>
   
       <button type="button" id="catNext"
-              class="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white/80 border border-gray-200 shadow rounded-full p-2 hover:bg-white"
+              class="absolute right-0 top-1/2 -translate-y-1/2 z-10 bg-white border border-gray-200 shadow rounded-full p-2 hover:bg-white"
               aria-label="Próximo">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
@@ -1118,45 +1119,22 @@ foreach ($ocorrencias as $o) {
     </div>
   </section>
 
-  <!-- Categorias de ocorrências (mobile) -->
-  <section class="mb-4 block md:hidden">
-    <h3 class="text-lg font-bold mb-2">Registre Ocorrências</h3>
-    <div class="grid grid-cols-3 gap-3">
-      <?php foreach($categories as $cat): ?>
-      <form method="GET" action="registrar_ocorrencia.php">
-        <input type="hidden" name="categoryId" value="<?= htmlspecialchars($cat['id']) ?>">
-        <button type="submit" class="flex flex-col items-center group cursor-pointer hover:bg-gray-50 rounded-lg p-2 transition-all duration-200 w-full">
-          <div class="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-2 group-hover:shadow-lg group-hover:scale-105 transition-all duration-200">
-            <?= $cat['icon'] ?>
-          </div>
-          <span class="text-[10px] text-center text-gray-700 leading-tight group-hover:text-gray-900 font-medium">
-            <?= htmlspecialchars($cat['name']) ?>
-          </span>
-        </button>
-      </form>
-      <?php endforeach; ?>
-    </div>
-  </section>
-    
-    <script>
+  <!-- Section mobile vertical removida -->
+
+  <script>
     document.addEventListener('DOMContentLoaded', function() {
       const scroller = document.getElementById('catScroller');
       const prevBtn = document.getElementById('catPrev');
       const nextBtn = document.getElementById('catNext');
       
-      // Função para verificar se precisa mostrar os botões
       function checkScrollButtons() {
         prevBtn.style.display = scroller.scrollLeft > 0 ? 'block' : 'none';
         nextBtn.style.display = (scroller.scrollLeft + scroller.clientWidth) < scroller.scrollWidth ? 'block' : 'none';
       }
       
-      // Evento de scroll
       scroller.addEventListener('scroll', checkScrollButtons);
-      
-      // Evento de resize
       window.addEventListener('resize', checkScrollButtons);
       
-      // Botões de navegação
       prevBtn.addEventListener('click', () => {
         scroller.scrollBy({ left: -240, behavior: 'smooth' });
       });
@@ -1165,16 +1143,9 @@ foreach ($ocorrencias as $o) {
         scroller.scrollBy({ left: 240, behavior: 'smooth' });
       });
       
-      // Verificação inicial
       checkScrollButtons();
     });
-    </script>
-  </section>
-
-
- 
-
-  </section>
+  </script>
 
   <!-- Seção de Pesquisas Disponíveis -->
   <?php if (!$hasAnsweredPriorities): ?>

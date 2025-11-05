@@ -648,6 +648,9 @@ document.addEventListener('DOMContentLoaded', () => {
       map.setView([lat, lng], map.getZoom());
     }
     setCoords(lat, lng);
+
+    // Persiste coordenadas no navegador
+    try { localStorage.setItem('radci_coords', `${lat},${lng}`); } catch(_) {}
     
     // Só faz o reverse se for explicitamente solicitado
     if (opts.reverse === true) {
