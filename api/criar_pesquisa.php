@@ -81,7 +81,6 @@ $_SESSION['criar_pesquisa_back'] = $backUrl ?: $defaultBack;
 
 // criação das tabelas auxiliares (se não existirem)
 try {
-    // Tabelas de perguntas e respostas (já existentes)
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS pesquisa_perguntas (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -110,7 +109,6 @@ try {
             INDEX (usuario_id)
         )
     ");
-    // Nova tabela de metadados
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS pesquisa_meta (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -125,6 +123,23 @@ try {
             criador_perfil INT NULL,
             criado_por VARCHAR(20) NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ");
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS pesquisa (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            sid VARCHAR(100) UNIQUE,
+            titulo VARCHAR(255) NOT NULL,
+            descricao TEXT NULL,
+            tipo_destinatario VARCHAR(50) NULL,
+            cidade VARCHAR(100) NULL,
+            uf VARCHAR(2) NULL,
+            json LONGTEXT NULL,
+            criador_usuario_id INT NULL,
+            criador_perfil INT NULL,
+            criado_por VARCHAR(20) NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_pesquisa_destino (tipo_destinatario, cidade, uf)
         )
     ");
 } catch (Throwable $_) {}
@@ -152,43 +167,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 @file_put_contents($path, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
                 if (file_exists($path)) {
-                    // Dados base
                     $sid = basename($fname, '.json');
                     $recipientType = $data['recipientType'] ?? 'todos';
                     $targetCity    = trim($data['targetCity'] ?? '');
                     $targetUF      = strtoupper(trim($data['targetUF'] ?? ''));
 
-                    // Inserção na tabela "pesquisa" com colunas do criador
+                    // 1) Insere na tabela canônica 'pesquisa_meta'
+                    $pesquisaIdMeta = 0;
+                    try {
+                        $insMeta = $pdo->prepare("
+                            INSERT INTO pesquisa_meta (sid, titulo, descricao, tipo_destinatario, cidade, uf, json, criador_usuario_id, criador_perfil, criado_por)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ");
+                        $insMeta->execute([
+                            $sid,
+                            $data['title'] ?? 'Pesquisa',
+                            $data['description'] ?? '',
+                            $recipientType,
+                            $targetCity ?: null,
+                            $targetUF ?: null,
+                            $json,
+                            intval($_SESSION['usuario_id'] ?? 0) ?: null,
+                            $perfilAtual ?: null,
+                            ($perfilAtual === 10 ? 'admin' : ($perfilAtual === 2 ? 'prefeito' : null)),
+                        ]);
+                        $pesquisaIdMeta = (int)$pdo->lastInsertId();
+                    } catch (Throwable $_) {}
+
+                    // 2) Compatibilidade: grava também em 'pesquisa' (se existir)
                     try {
                         $colsStmt = $pdo->query("SHOW COLUMNS FROM pesquisa");
                         $cols = array_map(fn($r) => $r['Field'], $colsStmt->fetchAll());
-
-                        // Garante coluna SID para associação com o JSON criado
-                        if (!in_array('sid', $cols)) {
-                            try { $pdo->exec("ALTER TABLE pesquisa ADD COLUMN sid VARCHAR(100) UNIQUE"); } catch (Throwable $_) {}
-                            // Atualiza lista de colunas após criar SID
-                            try {
-                                $colsStmt = $pdo->query("SHOW COLUMNS FROM pesquisa");
-                                $cols = array_map(fn($r) => $r['Field'], $colsStmt->fetchAll());
-                            } catch (Throwable $_) {}
-                        }
-                        // Garante colunas de rastreio do criador (se existirem/serem criadas)
-                        if (!in_array('criador_usuario_id', $cols)) {
-                            try { $pdo->exec("ALTER TABLE pesquisa ADD COLUMN criador_usuario_id INT NULL"); } catch (Throwable $_) {}
-                        }
-                        if (!in_array('criador_perfil', $cols)) {
-                            try { $pdo->exec("ALTER TABLE pesquisa ADD COLUMN criador_perfil INT NULL"); } catch (Throwable $_) {}
-                        }
-                        if (!in_array('criado_por', $cols)) {
-                            try { $pdo->exec("ALTER TABLE pesquisa ADD COLUMN criado_por VARCHAR(20) NULL"); } catch (Throwable $_) {}
-                        }
-                        // Atualiza lista de colunas após possíveis alterações
-                        try {
-                            $colsStmt = $pdo->query("SHOW COLUMNS FROM pesquisa");
-                            $cols = array_map(fn($r) => $r['Field'], $colsStmt->fetchAll());
-                        } catch (Throwable $_) {}
-
-                        // Mapeia possíveis colunas do seu modelo
                         $candidate = [
                             'sid'               => $sid,
                             'titulo'            => $data['title'] ?? 'Pesquisa',
@@ -197,13 +206,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'cidade'            => $targetCity ?: null,
                             'uf'                => $targetUF ?: null,
                             'json'              => $json,
-                            // Registro do criador
                             'criador_usuario_id'=> intval($_SESSION['usuario_id'] ?? 0) ?: null,
                             'criador_perfil'    => $perfilAtual ?: null,
                             'criado_por'        => ($perfilAtual === 10 ? 'admin' : ($perfilAtual === 2 ? 'prefeito' : null)),
                         ];
                         $insertData = array_filter($candidate, fn($k) => in_array($k, $cols), ARRAY_FILTER_USE_KEY);
-
                         if (!empty($insertData)) {
                             $names = array_keys($insertData);
                             $place = implode(',', array_fill(0, count($names), '?'));
@@ -211,13 +218,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $stmt  = $pdo->prepare($sql);
                             $stmt->execute(array_values($insertData));
                         }
-                    } catch (Throwable $e) {
-                        // error_log('Falha ao inserir em pesquisa: ' . $e->getMessage());
-                    }
+                    } catch (Throwable $_) {}
 
-                    // após inserir, salvar perguntas normalizadas
+                    // 3) Salva perguntas usando o id de 'pesquisa_meta'
                     try {
-                        $pesquisaId = (int)$pdo->lastInsertId();
+                        $pesquisaId = $pesquisaIdMeta;
                         if ($pesquisaId > 0 && is_array($questions)) {
                             $ins = $pdo->prepare("
                                 INSERT INTO pesquisa_perguntas (pesquisa_id, ordem, tipo, texto, opcoes_json, obrigatoria)
@@ -235,6 +240,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $opcoes = json_encode(['items' => (array)($q['options'] ?? [])], JSON_UNESCAPED_UNICODE);
                                 } elseif ($tipo === 'nota') {
                                     $opcoes = json_encode(['min' => 1, 'max' => 5], JSON_UNESCAPED_UNICODE);
+                                } else {
+                                    $tipo = 'texto';
                                 }
 
                                 if ($texto !== '') {

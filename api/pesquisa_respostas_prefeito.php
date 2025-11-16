@@ -29,6 +29,15 @@ if ($temMeta) {
 
 $pid = intval($_GET['pid'] ?? 0);
 $respostas = [];
+// Inclui "Pesquisa de Prioridades" como opção virtual no dropdown
+try {
+  $temPrioridades = $pdo->query("SHOW TABLES LIKE 'usuarios_prioridades'")->rowCount() > 0;
+  if ($temPrioridades) {
+    array_unshift($pesquisas, ['id' => -1, 'titulo' => 'Pesquisa de Prioridades', 'created_at' => null]);
+  }
+} catch (Throwable $_) {}
+
+// Pesquisas normais
 if ($pid > 0) {
   try {
     $stmt = $pdo->prepare("
@@ -46,10 +55,73 @@ if ($pid > 0) {
   } catch (Throwable $_) {}
 }
 
+// Prioridades
+if ($pid === -1) {
+  try {
+    $stmt = $pdo->query("
+      SELECT
+        u.id AS usuario_id,
+        u.nome AS usuario_nome,
+        u.email AS usuario_email,
+        u.perfil AS perfil_usuario,
+        u.municipio AS cidade,
+        UPPER(u.uf) AS uf,
+        up.saude, up.inovacao, up.mobilidade, up.politicasPublicas, up.riscosUrbanos, up.sustentabilidade,
+        up.planejamentoUrbano, up.educacao, up.meioAmbiente, up.infraestruturaCidade, up.segurancaPublica, up.energiasInteligentes,
+        DATE_FORMAT(up.data_registro, '%Y-%m-%d %H:%i:%s') AS created_at
+      FROM usuarios_prioridades up
+      LEFT JOIN usuarios u ON u.id = up.usuario_id
+      ORDER BY up.data_registro DESC
+    ");
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $row) {
+      $labels = [
+        'saude' => 'Saúde',
+        'inovacao' => 'Inovação',
+        'mobilidade' => 'Mobilidade',
+        'politicasPublicas' => 'Políticas Públicas',
+        'riscosUrbanos' => 'Riscos Urbanos',
+        'sustentabilidade' => 'Sustentabilidade',
+        'planejamentoUrbano' => 'Planejamento Urbano',
+        'educacao' => 'Educação',
+        'meioAmbiente' => 'Meio Ambiente',
+        'infraestruturaCidade' => 'Infraestrutura da Cidade',
+        'segurancaPublica' => 'Segurança Pública',
+        'energiasInteligentes' => 'Energias Inteligentes',
+      ];
+      $ranking = [];
+      foreach ($labels as $col => $label) {
+        $val = isset($row[$col]) ? intval($row[$col]) : null;
+        if (!is_null($val) && $val > 0) {
+          $ranking[$label] = $val;
+        }
+      }
+      asort($ranking);
+      $parts = [];
+      foreach ($ranking as $label => $pos) {
+        $parts[] = $pos . ') ' . $label;
+      }
+      $ordem = implode(', ', $parts);
+
+      $respostas[] = [
+        'usuario_id' => $row['usuario_id'],
+        'usuario_nome' => $row['usuario_nome'],
+        'usuario_email' => $row['usuario_email'],
+        'perfil_usuario' => $row['perfil_usuario'],
+        'cidade' => $row['cidade'],
+        'uf' => $row['uf'],
+        'pergunta_texto' => 'Ordenação das prioridades da cidade',
+        'resposta_json' => $ordem,
+        'created_at' => $row['created_at'],
+      ];
+    }
+  } catch (Throwable $_) {}
+}
+
 // CSV
-if ($pid > 0 && isset($_GET['download']) && $_GET['download'] === 'csv') {
+if (($pid > 0 || $pid === -1) && isset($_GET['download']) && $_GET['download'] === 'csv') {
   header('Content-Type: text/csv; charset=utf-8');
-  header('Content-Disposition: attachment; filename=pesquisa_'.$pid.'_respostas_prefeito.csv');
+  header('Content-Disposition: attachment; filename='.($pid === -1 ? 'prioridades_respostas_prefeito.csv' : ('pesquisa_'.$pid.'_respostas_prefeito.csv')));
   $out = fopen('php://output', 'w');
   fputcsv($out, ['Respondente', 'Email', 'Perfil', 'Cidade', 'UF', 'Pergunta', 'Resposta', 'RespondidaEm'], ';');
   foreach ($respostas as $r) {
@@ -64,7 +136,7 @@ if ($pid > 0 && isset($_GET['download']) && $_GET['download'] === 'csv') {
       intval($r['perfil_usuario']),
       $r['cidade'] ?: '',
       strtoupper($r['uf'] ?: ''),
-      $r['pergunta_texto'] ?: ('Pergunta #'.$r['pergunta_id']),
+      $r['pergunta_texto'] ?: ('Pergunta #'.($r['pergunta_id'] ?? '')),
       $val,
       $r['created_at'] ?: ''
     ], ';');
@@ -136,17 +208,17 @@ function perfilNome($p) {
         <option value="0">Selecione uma pesquisa</option>
         <?php foreach ($pesquisas as $p): ?>
           <option value="<?= (int)$p['id'] ?>" <?= ($pid === (int)$p['id'] ? 'selected' : '') ?>>
-            <?= htmlspecialchars(($p['titulo'] ?? 'Pesquisa').' '.(isset($p['created_at']) ? '('.$p['created_at'].')' : '')) ?>
+            <?= htmlspecialchars(($p['titulo'] ?? 'Pesquisa').' '.(isset($p['created_at']) && $p['created_at'] ? '('.$p['created_at'].')' : '')) ?>
           </option>
         <?php endforeach; ?>
       </select>
       <button class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 w-full md:w-auto">Filtrar</button>
-      <?php if ($pid > 0): ?>
+      <?php if ($pid > 0 || $pid === -1): ?>
         <a class="px-4 py-2 rounded bg-gray-100 text-gray-800 hover:bg-gray-200 w-full md:w-auto text-center" href="?pid=<?= (int)$pid ?>&download=csv">Baixar CSV</a>
       <?php endif; ?>
     </form>
 
-    <?php if ($pid <= 0): ?>
+    <?php if ($pid === 0): ?>
       <p class="text-gray-600">Selecione uma pesquisa para ver as respostas.</p>
     <?php elseif (empty($respostas)): ?>
       <p class="text-gray-600">Nenhuma resposta encontrada para esta pesquisa.</p>

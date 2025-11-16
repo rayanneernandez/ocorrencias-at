@@ -84,8 +84,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $v = trim($_POST["q_$qid"] ?? '');
         if ($v !== '') { $val = intval($v); }
       } else {
-        $v = trim($_POST["q_$qid"] ?? '');
-        if ($v !== '') { $val = $v; }
+        // Resposta em texto ou qualquer outro tipo padrão
+        $v = isset($_POST["q_$qid"]) ? trim($_POST["q_$qid"]) : '';
+        // Se obrigatória mas veio vazia, registra string vazia para não quebrar o envio
+        if ($v !== '' || intval($q['obrigatoria'] ?? 0) === 1) { $val = $v; }
       }
 
       if ($val !== null) {
@@ -108,7 +110,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($sidDb !== '') { $sid = $sidDb; }
       } catch (Throwable $_) {}
     }
-    $_SESSION['answered_surveys'][$sid ?: ('db_'.$pid)] = true;
+    $sidKey = $sid !== '' ? $sid : ('db_'.$pid);
+
+    // Garante estrutura de sessão por usuário antes de indexar
+    if (!isset($_SESSION['answered_surveys']) || !is_array($_SESSION['answered_surveys'])) {
+      $_SESSION['answered_surveys'] = [];
+    }
+    if (!isset($_SESSION['answered_surveys'][$usuarioId]) || !is_array($_SESSION['answered_surveys'][$usuarioId])) {
+      $_SESSION['answered_surveys'][$usuarioId] = [];
+    }
+    $_SESSION['answered_surveys'][$usuarioId][$sidKey] = true;
 
     header('Location: dashboard.php?answered=pesquisa');
     exit;

@@ -69,7 +69,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $s->execute([$pid]);
             $sid = trim($s->fetchColumn() ?: '');
         } catch (Throwable $_) {}
-        $_SESSION['answered_surveys'][$sid ?: ('db_'.$pid)] = true;
+        $sidKey = $sid !== '' ? $sid : ('db_'.$pid);
+
+        // Garante estrutura de sessão por usuário antes de indexar
+        if (!isset($_SESSION['answered_surveys']) || !is_array($_SESSION['answered_surveys'])) {
+            $_SESSION['answered_surveys'] = [];
+        }
+        if (!isset($_SESSION['answered_surveys'][$usuarioId]) || !is_array($_SESSION['answered_surveys'][$usuarioId])) {
+            $_SESSION['answered_surveys'][$usuarioId] = [];
+        }
+        $_SESSION['answered_surveys'][$usuarioId][$sidKey] = true;
 
         echo json_encode(['ok' => true]);
     } catch (Throwable $e) {

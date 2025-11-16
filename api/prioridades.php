@@ -120,7 +120,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_priorities']) && 
     }
 
     // Marca sessão para esconder no Dashboard e redireciona com confirmação
-    $_SESSION['answered_priorities'] = true;
+    if (!isset($_SESSION['answered_priorities']) || !is_array($_SESSION['answered_priorities'])) {
+        $_SESSION['answered_priorities'] = [];
+    }
+    $_SESSION['answered_priorities'][$userId] = true;
     header('Location: dashboard.php?answered=prioridades');
     exit;
 }

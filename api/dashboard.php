@@ -136,7 +136,7 @@ try {
   $hasAnsweredPriorities = false;
 }
 // Fallback imediato por sessão: se acabou de responder, considera já respondido na mesma navegação
-if (!$hasAnsweredPriorities && !empty($_SESSION['answered_priorities'])) {
+if (!$hasAnsweredPriorities && !empty($_SESSION['answered_priorities'][$userId])) {
   $hasAnsweredPriorities = true;
 }
 
@@ -231,7 +231,7 @@ if ($userId) {
   } catch (Throwable $_) {}
 }
 
-// NOVO: montar pesquisas disponíveis a partir da tabela 'pesquisa' (filtradas por perfil/cidade/UF)
+// NOVO: montar pesquisas disponíveis a partir de 'pesquisa_meta' (preferencial) e 'pesquisa' (compatibilidade)
 try {
   $usuarioMunicipio = null; $usuarioUF = null;
   if ($userId > 0) {
@@ -242,40 +242,86 @@ try {
     $usuarioUF = strtoupper(trim($usrRow['uf'] ?? ''));
   }
 
-  $sql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n  ";
-  $params = [];
+  // Listas separadas para controle fino
+  $availableSurveysMeta   = [];
+  $availableSurveysLegacy = [];
+  $availableSurveys       = $availableSurveys ?? [];
+  $availableSurveysCTA    = []; // apenas META, usado pelo card "Responder Agora"
 
-  if ($usuarioMunicipio !== '') {
-    $sql .= " AND (cidade IS NULL OR cidade = '' OR cidade = ?)";
-    $params[] = $usuarioMunicipio;
-  } else {
-    $sql .= " AND (cidade IS NULL OR cidade = '')";
+  $seenSid = [];
+
+  // Lista de SIDs já respondidos (DB + sessão)
+  $answeredSids = [];
+  try {
+    $ansStmt = $pdo->prepare("\n      SELECT pm.sid\n        FROM pesquisa_respostas r\n        JOIN pesquisa_meta pm ON pm.id = r.pesquisa_id\n       WHERE r.usuario_id = ?\n    ");
+    $ansStmt->execute([$userId]);
+    foreach ($ansStmt->fetchAll(PDO::FETCH_COLUMN) as $sid) {
+      if ($sid) { $answeredSids[strtolower(trim($sid))] = true; }
+    }
+  } catch (Throwable $_) {}
+  if (!empty($_SESSION['answered_surveys'][$userId])) {
+    foreach ($_SESSION['answered_surveys'][$userId] as $sid => $flag) {
+      if ($flag && $sid) { $answeredSids[strtolower(trim($sid))] = true; }
+    }
   }
 
-  if ($usuarioUF !== '') {
-    $sql .= " AND (uf IS NULL OR uf = '' OR UPPER(uf) = ?)";
-    $params[] = $usuarioUF;
-  } else {
-    $sql .= " AND (uf IS NULL OR uf = '')";
+  // 1) Pesquisa META (canônica) — já exclui respondidas por ID
+  $metaSql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa_meta\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n       AND (\n         (cidade IS NULL OR cidade = '')\n         OR (cidade IS NOT NULL AND cidade <> '' AND (? = '' OR cidade = ?))\n       )\n       AND (\n         (uf IS NULL OR uf = '')\n         OR (uf IS NOT NULL AND uf <> '' AND (? = '' OR UPPER(uf) = ?))\n       )\n       AND id NOT IN (SELECT pesquisa_id FROM pesquisa_respostas WHERE usuario_id = ?)\n     ORDER BY id DESC\n     LIMIT 10\n  ";
+  $params = [$usuarioMunicipio, $usuarioMunicipio, $usuarioUF, $usuarioUF, $userId];
+  $mStmt = $pdo->prepare($metaSql);
+  $mStmt->execute($params);
+  $mRows = $mStmt->fetchAll(PDO::FETCH_ASSOC);
+
+  foreach ($mRows as $r) {
+    $sid = trim($r['sid'] ?? '');
+    if ($sid !== '') {
+      if (!isset($answeredSids[strtolower($sid)])) {
+        $seenSid[strtolower($sid)] = true;
+        $availableSurveysMeta[] = [
+          'sid'         => $sid,
+          'db_id'       => intval($r['db_id']),
+          'title'       => $r['titulo'] ?? 'Pesquisa',
+          'description' => $r['descricao'] ?? ''
+        ];
+      }
+    } else {
+      // META sem sid ainda é válido para CTA
+      $availableSurveysMeta[] = [
+        'sid'         => null,
+        'db_id'       => intval($r['db_id']),
+        'title'       => $r['titulo'] ?? 'Pesquisa',
+        'description' => $r['descricao'] ?? ''
+      ];
+    }
   }
 
-  $sql .= " AND id NOT IN (SELECT pesquisa_id FROM pesquisa_respostas WHERE usuario_id = ?)\n            ORDER BY id DESC\n            LIMIT 10";
-  $params[] = $userId;
-
+  // 2) Compatibilidade: tabela 'pesquisa' (legado)
+  //    Apenas itens com SID não vazio e não respondidos; evita duplicar por SID.
+  $sql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n       AND (\n         (cidade IS NULL OR cidade = '')\n         OR (cidade IS NOT NULL AND cidade <> '' AND (? = '' OR cidade = ?))\n       )\n       AND (\n         (uf IS NULL OR uf = '')\n         OR (uf IS NOT NULL AND uf <> '' AND (? = '' OR UPPER(uf) = ?))\n       )\n     ORDER BY id DESC\n     LIMIT 10\n  ";
+  $params = [$usuarioMunicipio, $usuarioMunicipio, $usuarioUF, $usuarioUF];
   $pStmt = $pdo->prepare($sql);
   $pStmt->execute($params);
   $pRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
 
   foreach ($pRows as $r) {
-    $availableSurveys[] = [
-      'sid'         => $r['sid'] ?? null,
+    $sid = trim($r['sid'] ?? '');
+    if ($sid === '') { continue; } // ignora legado sem SID
+    if (isset($answeredSids[strtolower($sid)])) { continue; } // já respondida
+    if (isset($seenSid[strtolower($sid)])) { continue; } // já temos via META
+    if (empty($r['titulo'])) { continue; } // ignora registros incompletos
+
+    $availableSurveysLegacy[] = [
+      'sid'         => $sid,
       'db_id'       => intval($r['db_id']),
       'title'       => $r['titulo'] ?? 'Pesquisa',
       'description' => $r['descricao'] ?? ''
     ];
   }
-} catch (Throwable $_) {}
 
+  // Consolida listas
+  $availableSurveys    = array_values(array_merge($availableSurveysMeta, $availableSurveysLegacy));
+  $availableSurveysCTA = $availableSurveysMeta; // card principal usa apenas META
+} catch (Throwable $_) {}
 
 // Métricas
 $totRegistradas = 0;
@@ -1274,12 +1320,14 @@ if ($userId > 0) {
       <div class="bg-white rounded-2xl shadow p-6 border border-gray-200">
         <h3 class="text-lg font-bold text-gray-900 mb-1">Pesquisa de Prioridades</h3>
         <p class="text-sm text-gray-600 mb-4">Ajude-nos a entender quais são as prioridades da sua cidade. Sua opinião é muito importante!</p>
-        <a href="<?= $prioridadesDbId ? ('pesquisa_responder.php?id=' . urlencode($prioridadesDbId)) : 'pesquisa_responder.php?sid=prioridades' ?>" class="w-full inline-block text-center bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">Responder Pesquisa</a>
+        <a href="prioridades.php" class="w-full inline-block text-center bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">Responder Pesquisa</a>
       </div>
     </section>
-  <?php elseif (!empty($availableSurveys)): ?>
+  <?php endif; ?>
+
+  <?php if (!empty($availableSurveysCTA)): ?>
     <section class="mb-6">
-      <?php $sv = $availableSurveys[0]; ?>
+      <?php $sv = $availableSurveysCTA[0]; ?>
       <div class="bg-white rounded-2xl shadow p-6 border border-gray-200">
         <h3 class="text-lg font-bold text-gray-900 mb-1"><?= htmlspecialchars($sv['title']) ?></h3>
         <?php if (!empty($sv['description'])): ?><p class="text-sm text-gray-600 mb-4"><?= htmlspecialchars($sv['description']) ?></p><?php endif; ?>
@@ -1900,7 +1948,7 @@ if ($userId > 0) {
             </svg>
             Aguardando resposta
           </small>
-          <a href="<?= $prioridadesDbId ? ('pesquisa_responder.php?id=' . urlencode($prioridadesDbId)) : 'pesquisa_responder.php?sid=prioridades' ?>" class="mt-2 inline-block">
+          <a href="prioridades.php" class="mt-2 inline-block">
             Responder Agora
           </a>
         </div>
