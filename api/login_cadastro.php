@@ -8,6 +8,10 @@ $erroLogin = "";
 $erroCadastro = "";
 $sucessoCadastro = "";
 
+// Flash de sucesso para exibir toast de 3s no front
+$flashSuccess = $_SESSION['flash_success'] ?? '';
+unset($_SESSION['flash_success']);
+
 if (isset($_POST['acao'])) {
     if ($_POST['acao'] === 'login') {
         $email = trim($_POST['login_email'] ?? '');
@@ -21,45 +25,55 @@ if (isset($_POST['acao'])) {
             $user = null;
         }
 
-        $ok = false;
+        // Se existe solicitação pendente, bloqueia login e mostra mensagem específica
+        $hasPending = false;
         if ($user) {
-            if (password_verify($senha, $user['senha']) || $user['senha'] === $senha) {
-                $ok = true;
+            try {
+                $stmtP = $pdo->prepare("SELECT 1 FROM admin_publico_solicitacoes WHERE usuario_id = ? AND status = 'pendente' LIMIT 1");
+                $stmtP->execute([(int)$user['id']]);
+                $hasPending = (bool)$stmtP->fetchColumn();
+            } catch (Throwable $_) {}
+        }
+        if ($user && (int)$user['perfil'] === 1 && $hasPending) {
+            $erroLogin = "Sua solicitação de Administrador Público está pendente. Aguarde aprovação por e-mail.";
+        } else {
+            $ok = false;
+            if ($user) {
+                if (password_verify($senha, $user['senha']) || $user['senha'] === $senha) {
+                    $ok = true;
+                }
+            }
+            if (!$ok) {
+                $erroLogin = "E-mail ou senha inválidos.";
+            } else {
+                $_SESSION['usuario_id']     = (int)$user['id'];
+                $_SESSION['usuario_nome']   = $user['nome'];
+                $_SESSION['usuario_perfil'] = (int)$user['perfil'];
+
+                $redirect = 'dashboard.php';
+                if ((int)$user['perfil'] === 10) { $redirect = 'admin_inicio.php'; }
+                elseif ((int)$user['perfil'] === 2) { $redirect = 'prefeito_inicio.php'; }
+                elseif ((int)$user['perfil'] === 3) { $redirect = 'secretario.php'; }
+
+                header("Location: $redirect");
+                exit();
             }
         }
-
-        if (!$ok) {
-            $erroLogin = "E-mail ou senha inválidos.";
-        } else {
-            $_SESSION['usuario_id']     = (int)$user['id'];
-            $_SESSION['usuario_nome']   = $user['nome'];
-            $_SESSION['usuario_perfil'] = (int)$user['perfil'];
-
-            $redirect = 'dashboard.php';
-            // 10 = Admin → usuarios.php
-            if ((int)$user['perfil'] === 10) { $redirect = 'usuarios.php'; }
-            // 2 = Prefeito → prefeito_inicio.php
-            elseif ((int)$user['perfil'] === 2) { $redirect = 'prefeito_inicio.php'; }
-            // 3 = Secretário → secretario.php
-            elseif ((int)$user['perfil'] === 3) { $redirect = 'secretario.php'; }
-            // 1 = Cidadão → dashboard.php (default)
-
-            header("Location: $redirect");
-            exit();
-        }
     } elseif ($_POST['acao'] === 'cadastro') {
-        $perfilStr       = trim($_POST['perfil'] ?? '');
-        $nome            = trim($_POST['nome_completo'] ?? '');
-        $email           = trim($_POST['email_cadastro'] ?? '');
-        $senha           = trim($_POST['senha_cadastro'] ?? '');
-        $confirmarSenha  = trim($_POST['confirmar_senha'] ?? '');
-        $termos          = isset($_POST['termos']);
-        $privacidade     = isset($_POST['privacidade']);
+        $nome           = trim($_POST['nome_completo'] ?? '');
+        $email          = trim($_POST['email_cadastro'] ?? '');
+        $senha          = (string)($_POST['senha_cadastro'] ?? '');
+        $confirmarSenha = (string)($_POST['confirmar_senha'] ?? '');
+        $termos         = isset($_POST['termos']) ? 1 : 0;
+        $privacidade    = isset($_POST['privacidade']) ? 1 : 0;
 
-        // Corrige mapeamento de perfis para alinhamento com o sistema:
-        $perfilMap = ['cidadao'=>1, 'prefeito'=>2, 'secretario'=>3, 'admin_radci'=>10];
+        $perfilStr       = trim($_POST['perfil'] ?? '');
+        $solicitadoAdminPublico = ($perfilStr === 'admin_publico');
+        
+        $perfilMap = ['cidadao'=>1, 'admin_publico'=>1, 'admin_radci'=>10];
         $perfil    = $perfilMap[$perfilStr] ?? 1;
 
+        // Validação dos campos base
         if ($senha !== $confirmarSenha) {
             $erroCadastro = "As senhas não coincidem.";
         } elseif (!$termos || !$privacidade) {
@@ -67,6 +81,59 @@ if (isset($_POST['acao'])) {
         } elseif (strlen($senha) < 6 || !preg_match('/[A-Za-z]/', $senha) || !preg_match('/[0-9]/', $senha) || !preg_match('/[^A-Za-z0-9]/', $senha)) {
             $erroCadastro = "A senha deve conter no mínimo 6 caracteres, incluindo letras, números e caracteres especiais.";
         } else {
+            // Validação de documentos quando é Administrador Público
+            if ($solicitadoAdminPublico) {
+                $docTipo      = trim($_POST['doc_tipo'] ?? '');
+                $docOutros    = trim($_POST['doc_outros'] ?? '');
+                $docFonteUrl  = trim($_POST['doc_fonte_url'] ?? '');
+                $allowedTipos = ['diploma_prefeito','termo_posse','publicacao_oficial','oficio_timbre','outros'];
+                if (!in_array($docTipo, $allowedTipos, true)) {
+                    $erroCadastro = "Selecione um tipo de documento válido.";
+                } elseif ($docTipo === 'outros' && $docOutros === '') {
+                    $erroCadastro = "Descreva o documento quando selecionar 'Outros'.";
+                }
+
+                $fileErr = '';
+                $storedTemp = [];
+                if (!isset($_FILES['doc_arquivos']) || empty($_FILES['doc_arquivos']['name'])) {
+                    $fileErr = "Anexe ao menos um documento (PDF ou imagem).";
+                } else {
+                    $names = $_FILES['doc_arquivos']['name'];
+                    $tmps  = $_FILES['doc_arquivos']['tmp_name'];
+                    $errs  = $_FILES['doc_arquivos']['error'];
+                    $cnt   = is_array($names) ? count($names) : 1;
+                    if ($cnt > 3) {
+                        $fileErr = "Você pode anexar no máximo 3 arquivos.";
+                    } else {
+                        $finfo = new finfo(FILEINFO_MIME_TYPE);
+                        for ($i = 0; $i < $cnt; $i++) {
+                            if (($errs[$i] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) { $fileErr = "Falha no upload de um dos arquivos."; break; }
+                            $mime = $finfo->file($tmps[$i]);
+                            $okMime = in_array($mime, ['application/pdf','image/jpeg','image/png'], true);
+                            if (!$okMime) { $fileErr = "Apenas PDF, JPG ou PNG são permitidos."; break; }
+                            $ext = strtolower(pathinfo($names[$i], PATHINFO_EXTENSION));
+                            $safe = preg_replace('/[^A-Za-z0-9._-]/', '_', pathinfo($names[$i], PATHINFO_FILENAME));
+                            $dest = __DIR__ . '/../uploads/temp/' . (uniqid('ap_', true)) . '_' . $safe . '.' . $ext;
+                            if (!@move_uploaded_file($tmps[$i], $dest)) { $fileErr = "Não foi possível salvar um dos arquivos."; break; }
+                            $storedTemp[] = ['path' => $dest, 'mime' => $mime, 'name' => $safe . '.' . $ext];
+                        }
+                    }
+                }
+                if ($fileErr) { $erroCadastro = $fileErr; }
+
+                if (!$erroCadastro && $docTipo === 'publicacao_oficial') {
+                    if (!filter_var($docFonteUrl, FILTER_VALIDATE_URL)) {
+                        $erroCadastro = "Informe a URL da publicação oficial (Diário Oficial ou site da Prefeitura/Estado).";
+                    }
+                }
+
+                // Se houve erro, limpa temp
+                if ($erroCadastro ?? '') {
+                    foreach ($storedTemp as $f) { @unlink($f['path']); }
+                }
+            }
+
+            // Inicializa variáveis para evitar avisos e validar corretamente
             $exists = false;
             try {
                 $stmt = $pdo->prepare("SELECT 1 FROM usuarios WHERE email = ? LIMIT 1");
@@ -77,7 +144,7 @@ if (isset($_POST['acao'])) {
             if ($exists) {
                 $erroCadastro = "E-mail já cadastrado.";
             } else {
-                // Validação específica quando perfil = Prefeito
+                // Dentro do bloco de cadastro, após verificar se o e-mail não existe:
                 if ($perfil === 2) {
                     $docTipo      = trim($_POST['doc_tipo'] ?? '');
                     $docOutros    = trim($_POST['doc_outros'] ?? '');
@@ -167,13 +234,111 @@ if (isset($_POST['acao'])) {
                             $perfil,
                             trim($_POST['cep'] ?? ''),
                             strtoupper(trim($_POST['uf'] ?? '')),
-                            trim($_POST['municipio'] ?? ''),
+                            trim($_POST['cidade'] ?? ''),
                             trim($_POST['bairro'] ?? ''),
-                            trim($_POST['rua'] ?? ''),
+                            trim($_POST['logradouro'] ?? ''),
                             trim($_POST['complemento'] ?? ''),
                         ]);
                         $newUserId = (int)$pdo->lastInsertId();
 
+                        // Garante a data de cadastro no banco
+                        try {
+                            if ($newUserId > 0) {
+                                $pdo->prepare("UPDATE usuarios SET created_at = NOW() WHERE id = ?")->execute([$newUserId]);
+                            }
+                        } catch (Throwable $_) {}
+                        if ($solicitadoAdminPublico && $newUserId > 0) {
+                            // Cria tabelas e grava solicitação pendente
+                            $pdo->exec("
+                                CREATE TABLE IF NOT EXISTS admin_publico_solicitacoes (
+                                    id INT AUTO_INCREMENT PRIMARY KEY,
+                                    usuario_id INT NOT NULL,
+                                    status ENUM('pendente','aprovado','recusado') NOT NULL DEFAULT 'pendente',
+                                    data_solicitacao DATETIME NOT NULL,
+                                    data_aprovacao DATETIME NULL,
+                                    aprovado_por INT NULL,
+                                    INDEX (usuario_id)
+                                )
+                            ");
+
+                            // Registra solicitação pendente
+                            $stmtSol = $pdo->prepare("
+                                INSERT INTO admin_publico_solicitacoes (usuario_id, status, data_solicitacao)
+                                VALUES (?, 'pendente', NOW())
+                            ");
+                            $stmtSol->execute([$newUserId]);
+
+                            // NOVO: criar tabela de validações e gravar anexos para aparecer como pendente
+                            $pdo->exec("
+                                CREATE TABLE IF NOT EXISTS admin_publico_validacoes (
+                                  id INT AUTO_INCREMENT PRIMARY KEY,
+                                  usuario_id INT NOT NULL,
+                                  tipo_documento VARCHAR(50) NOT NULL,
+                                  descricao_outros VARCHAR(255) NULL,
+                                  fonte_url VARCHAR(255) NULL,
+                                  arquivos_json TEXT NOT NULL,
+                                  status VARCHAR(20) NOT NULL DEFAULT 'pendente',
+                                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                  INDEX (usuario_id)
+                                )
+                            ");
+
+                            // Move arquivos da temp para uploads/admin_publico/{usuario_id}/ e registra JSON
+                            $finalDir = __DIR__ . '/../uploads/admin_publico/' . $newUserId . '/';
+                            if (!is_dir($finalDir)) { @mkdir($finalDir, 0777, true); }
+                            $finalFiles = [];
+                            foreach ($storedTemp ?? [] as $f) {
+                                $basename = basename($f['path']);
+                                $finalPath = $finalDir . $basename;
+                                if (@rename($f['path'], $finalPath)) {
+                                    $finalFiles[] = [
+                                        'path' => 'uploads/admin_publico/' . $newUserId . '/' . $basename,
+                                        'mime' => $f['mime'],
+                                        'name' => $f['name']
+                                    ];
+                                } else {
+                                    @copy($f['path'], $finalPath);
+                                    @unlink($f['path']);
+                                    $finalFiles[] = [
+                                        'path' => 'uploads/admin_publico/' . $newUserId . '/' . $basename,
+                                        'mime' => $f['mime'],
+                                        'name' => $f['name']
+                                    ];
+                                }
+                            }
+
+                            // Insere a validação pendente com os metadados (tipo de documento, etc.)
+                            $stmtVal = $pdo->prepare("
+                                INSERT INTO admin_publico_validacoes (usuario_id, tipo_documento, descricao_outros, fonte_url, arquivos_json, status)
+                                VALUES (?, ?, ?, ?, ?, 'pendente')
+                            ");
+                            $stmtVal->execute([
+                                $newUserId,
+                                $docTipo,
+                                $docOutros,
+                                $docFonteUrl,
+                                json_encode($finalFiles, JSON_UNESCAPED_SLASHES)
+                            ]);
+
+                            // Mensagem visível no card de cadastro
+                            $sucessoCadastro = 'Solicitação enviada para autorização. Você receberá um e-mail após a aprovação.';
+
+                            // Em vez da mensagem genérica, usa flash + redirect para exibir toast de 3s
+                            $_SESSION['flash_success'] = 'Solicitação enviada para autorização. Você receberá um e-mail após a aprovação.';
+                            if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                                @mail(
+                                    $email,
+                                    'RADCI - Solicitação de Administrador Público recebida',
+                                    "Olá {$nome},\n\nRecebemos sua solicitação para acesso como Administrador Público.\nAssim que for autorizada, você receberá um e-mail de confirmação.\n\nEquipe RADCI",
+                                    "Content-Type: text/plain; charset=UTF-8"
+                                );
+                            }
+                            header('Location: login_cadastro.php?tab=cadastro');
+                            exit();
+                        } else {
+                            // Cadastro comum (Cidadão/Admin RADCI)
+                            $sucessoCadastro = "Cadastro realizado com sucesso! Agora faça login.";
+                        }
                         // Se Prefeito: persiste os documentos e metadados
                         if ($perfil === 2) {
                             // Cria tabela de validação se não existir
@@ -223,7 +388,7 @@ if (isset($_POST['acao'])) {
                         }
 
                         $sucessoCadastro = "Cadastro realizado com sucesso! Agora faça login.";
-                        echo "<script>window.addEventListener('DOMContentLoaded',()=>{switchTab('login');});</script>";
+                        
                     } catch (Throwable $e) {
                         $erroCadastro = "Erro ao cadastrar usuário.";
                     }
@@ -235,7 +400,7 @@ if (isset($_POST['acao'])) {
 ?>
 
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-br"
 <head>
 <meta charset="UTF-8">
 <title>RADCI - Login e Cadastro</title>
@@ -260,6 +425,16 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 </head>
 <body class="min-h-screen flex flex-col bg-white text-gray-900">
 
+<?php if (!empty($flashSuccess)): ?>
+  <div id="toastSuccess" class="fixed top-4 left-1/2 -translate-x-1/2 bg-green-600 text-white px-4 py-2 rounded shadow z-50">
+    <?= htmlspecialchars($flashSuccess) ?>
+  </div>
+  <script>
+    setTimeout(() => { document.getElementById('toastSuccess')?.classList.add('hidden'); }, 3000);
+  </script>
+<?php endif; ?>
+
+
 <div class="flex-1 flex flex-col items-center justify-center px-4 pt-8 pb-8">
 <div class="w-full max-w-md relative">
 <!-- Botão voltar mobile -->
@@ -276,7 +451,7 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 <div class="flex-1">
 <div class="flex items-center justify-center mb-6 space-x-3">
 <div class="bg-green-500 p-3 rounded-xl">
-<svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+<img src="/radci/assets/images/logo.png" alt="RADCI" class="w-8 h-8">
 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7h16c-4.418 0-8-3.134-8-7z"/>
 </svg>
 </div>
@@ -288,13 +463,10 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 </div>
 </div>
 
-<!-- Container mobile -->
 <div class="md:hidden">
 <div class="flex items-center justify-center mb-6 space-x-3">
-<div class="bg-green-500 p-3 rounded-xl">
-<svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.866-3.582 7-8 7h16c-4.418 0-8-3.134-8-7z"/>
-</svg>
+<div class="bg-green-500 rounded-xl w-16 h-16 flex items-center justify-center">
+<img src="/radci/assets/images/logo.png" alt="RADCI" class="w-10 h-10">
 </div>
 <div>
 <h1 class="text-2xl font-bold">RADCI</h1>
@@ -304,13 +476,14 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 </div>
 
 <div class="bg-gray-50 rounded-2xl shadow-lg p-6 sm:p-8 relative">
-<div class="flex mb-8 border-b border-gray-300 sticky top-0 bg-gray-50 z-10">
-<button id="tabBtnLogin" onclick="switchTab('login')" class="flex-1 py-3 font-semibold text-gray-500 border-b-2 border-transparent">Entrar</button>
-<button id="tabBtnCadastro" onclick="switchTab('cadastro')" class="flex-1 py-3 font-semibold border-b-2 border-green-500 text-green-600">Cadastrar</button>
+<!-- Header das abas -->
+<div class="flex space-x-4 mb-6">
+<button id="tabBtnLogin" type="button" onclick="switchTab('login')" class="flex-1 py-3 font-semibold text-gray-500 border-b-2 border-transparent">Entrar</button>
+<button id="tabBtnCadastro" type="button" onclick="switchTab('cadastro')" class="flex-1 py-3 font-semibold border-b-2 border-green-500 text-green-600">Cadastrar</button>
 </div>
 
 <!-- LOGIN -->
-<div id="tabLogin" style="display:none;">
+<div id="tabLogin" style="<?php echo ($initialTab === 'login' ? 'display:block' : 'display:none'); ?>">
 <?php if($erroLogin) echo "<p class='text-red-500 mb-2'>$erroLogin</p>"; ?>
 <form method="POST" class="space-y-6">
 <input type="hidden" name="acao" value="login">
@@ -330,7 +503,7 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 </div>
 
 <!-- CADASTRO -->
-<div id="tabCadastro" style="display:none;">
+<div id="tabCadastro" style="<?php echo ($initialTab === 'cadastro' ? 'display:block' : 'display:none'); ?>">
 <?php if($erroCadastro) echo "<p class='text-red-500 mb-2'>$erroCadastro</p>"; ?>
 <?php if($sucessoCadastro) echo "<p class='text-green-500 mb-2'>$sucessoCadastro</p>"; ?>
 <form method="POST" class="space-y-6" id="formCadastro" enctype="multipart/form-data">
@@ -338,11 +511,10 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 
 <div>
 <label class="text-sm font-medium mb-2 block text-gray-700">Perfil *</label>
-<select name="perfil" id="perfilSelect" required class="w-full p-4 rounded-lg bg-white border border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-200 text-base transition-colors appearance-none">
-  <option value="">Selecione seu perfil</option>
-  <option value="cidadao">Cidadão</option>
-  <option value="prefeito">Prefeito</option>
-  <option value="secretario">Secretário</option>
+<select name="perfil" id="perfilSelect" required class="w-full p-4 rounded-lg bg-white border border-gray-300 focus:border-green-500 focus:ring-2 focus:ring-green-500 text-base transition-colors appearance-none">
+    <option value="">Selecione seu perfil</option>
+    <option value="cidadao">Cidadão</option>
+    <option value="admin_publico">Administrador Público</option>
 </select>
 </div>
 
@@ -383,9 +555,9 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 <div><label class="text-sm mb-1 block">CEP</label>
 <input type="text" id="cep" name="cep" maxlength="8" placeholder="00000000" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500"></div>
 
-<!-- Documentos do Prefeito (aparece somente quando perfil = Prefeito) -->
-<div id="prefeitoDocs" class="hidden mt-4 p-4 border border-gray-200 rounded-md bg-gray-50">
-  <h3 class="text-base font-semibold text-gray-800 mb-3">Documentos do Prefeito</h3>
+<!-- Documentos do Administrador Público (aparece somente quando perfil = Administrador Público) -->
+<div id="adminPublicoDocs" class="hidden mt-4 p-4 border border-gray-200 rounded-md bg-gray-50">
+  <h3 class="text-base font-semibold text-gray-800 mb-3">Documentos do Administrador Público</h3>
 
   <div class="mb-3">
     <label class="text-sm mb-1 block">Tipo de Documento *</label>
@@ -397,12 +569,12 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
       <option value="oficio_timbre">Ofício com timbre da Prefeitura</option>
       <option value="outros">Outros</option>
     </select>
-    <small class="text-gray-500">Escolha o documento que comprova seu exercício atual.</small>
+    <small class="text-gray-500">Escolha o documento que comprova sua nomeação/posse.</small>
   </div>
 
   <div id="docOutrosWrap" class="hidden mb-3">
     <label class="text-sm mb-1 block">Descreva o documento (quando selecionar “Outros”) *</label>
-    <input type="text" id="docOutros" name="doc_outros" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Ex.: Certidão, documento específico, etc.">
+    <input type="text" id="docOutros" name="doc_outros" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Ex.: Portaria, decreto, certidão, etc.">
   </div>
 
   <div id="docFonteUrlWrap" class="hidden mb-3">
@@ -431,6 +603,41 @@ function base_project_root() {
 $PROJECT_ROOT = base_project_root();
 ?>
 
+<!-- Botão para edição manual do endereço (acima dos termos) -->
+<div class="mt-4">
+    <button type="button" class="toggleDetailsBtn w-full bg-gray-200 text-gray-700 py-2 rounded-md font-medium hover:bg-gray-300 transition">
+        Editar manualmente endereço
+    </button>
+</div>
+
+<!-- Campos de endereço (inicialmente ocultos) -->
+<div id="addressDetails" class="hidden mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div>
+        <label class="text-sm mb-1 block">Logradouro</label>
+        <input type="text" id="logradouro" name="logradouro" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Rua/Avenida">
+    </div>
+    <div>
+        <label class="text-sm mb-1 block">Número</label>
+        <input type="text" id="numero" name="numero" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Número">
+    </div>
+    <div>
+        <label class="text-sm mb-1 block">Bairro</label>
+        <input type="text" id="bairro" name="bairro" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Bairro">
+    </div>
+    <div>
+        <label class="text-sm mb-1 block">Complemento</label>
+        <input type="text" id="complemento" name="complemento" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Apartamento, bloco, etc.">
+    </div>
+    <div>
+        <label class="text-sm mb-1 block">Cidade</label>
+        <input type="text" id="cidade" name="cidade" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="Cidade">
+    </div>
+    <div>
+        <label class="text-sm mb-1 block">UF</label>
+        <input type="text" id="uf" name="uf" maxlength="2" class="w-full p-3 rounded-md bg-white border border-gray-300 focus:border-green-500 focus:ring-1 focus:ring-green-500" placeholder="UF">
+    </div>
+</div>
+
 <div class="flex items-center space-x-2 mt-2">
     <input type="checkbox" id="termos" name="termos" required class="peer h-5 w-5 text-green-500 rounded-full border-gray-300 focus:ring-green-500">
     <label for="termos" class="text-sm cursor-pointer peer-checked:text-green-500">
@@ -453,14 +660,13 @@ $PROJECT_ROOT = base_project_root();
 </div>
 </div>
 
-<!-- Script: abas (global) e Prefeito -->
 <script>
-// Define switchTab de forma global para os botões com onclick
-function switchTab(tab) {
-  const login = document.getElementById('tabLogin');
-  const cadastro = document.getElementById('tabCadastro');
-  const btnLogin = document.getElementById('tabBtnLogin');
-  const btnCadastro = document.getElementById('tabBtnCadastro');
+// Define switchTab no escopo global
+window.switchTab = function(tab) {
+  var login = document.getElementById('tabLogin');
+  var cadastro = document.getElementById('tabCadastro');
+  var btnLogin = document.getElementById('tabBtnLogin');
+  var btnCadastro = document.getElementById('tabBtnCadastro');
 
   if (!login || !cadastro || !btnLogin || !btnCadastro) return;
 
@@ -485,37 +691,47 @@ function switchTab(tab) {
   }
 
   // Mantém o parâmetro na URL
-  const url = new URL(window.location);
+  var url = new URL(window.location);
   url.searchParams.set('tab', tab);
   history.replaceState(null, '', url);
 
-  // Recria ícones (se usa lucide)
-  if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
-}
+  // Recria ícones
+  if (window.lucide && typeof lucide.createIcons === 'function') { lucide.createIcons(); }
+};
+
+// Inicializa a aba ao carregar (sem PHP dentro do script)
+document.addEventListener('DOMContentLoaded', function () {
+  var params = new URLSearchParams(window.location.search);
+  var initial = params.get('tab') === 'login' ? 'login' : 'cadastro';
+  window.switchTab(initial);
+  if (window.lucide && typeof lucide.createIcons === 'function') { lucide.createIcons(); }
+});
+</script>
 </script>
 
 <script>
 (function() {
   function get(id) { return document.getElementById(id); }
 
-  // Toggling do bloco “Documentos do Prefeito”
+  // Exibir/ocultar documentos do Administrador Público
   function toggleDocs() {
-    const perfilSel = get('perfilSelect');
-    const docsWrap  = get('prefeitoDocs');
+    const perfilSel  = get('perfilSelect');
+    const docsWrap   = get('adminPublicoDocs');
     const outrosWrap = get('docOutrosWrap');
     const urlWrap    = get('docFonteUrlWrap');
     if (!perfilSel || !docsWrap) return;
 
-    const isPrefeito = perfilSel.value === 'prefeito';
-    docsWrap.classList.toggle('hidden', !isPrefeito);
-    docsWrap.style.display = isPrefeito ? 'block' : 'none';
+    const isAdminPublico = perfilSel.value === 'admin_publico';
+    docsWrap.classList.toggle('hidden', !isAdminPublico);
+    docsWrap.style.display = isAdminPublico ? 'block' : 'none';
 
-    if (!isPrefeito) {
+    if (!isAdminPublico) {
       if (outrosWrap) { outrosWrap.classList.add('hidden'); outrosWrap.style.display = 'none'; }
       if (urlWrap)    { urlWrap.classList.add('hidden');    urlWrap.style.display    = 'none'; }
     }
   }
 
+  // Mostrar campos complementares conforme tipo selecionado
   function handleDocTipoChange() {
     const tipoSel    = get('docTipo');
     const outrosWrap = get('docOutrosWrap');
@@ -531,13 +747,7 @@ function switchTab(tab) {
   }
 
   function init() {
-    // Aplica a aba inicial a partir do parâmetro
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab') === 'login' ? 'login' : 'cadastro';
-    // Usa a função global recém-definida
-    switchTab(tabParam);
-
-    // Inicializa estado dos documentos do Prefeito
+    // Estado inicial dos documentos
     toggleDocs();
     handleDocTipoChange();
 
@@ -560,8 +770,17 @@ function switchTab(tab) {
     const uf = get('uf');
     uf && uf.addEventListener('input', () => { uf.value = uf.value.toUpperCase().slice(0,2); });
 
-    // Ícones
-    if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
+    // Recria ícones
+    if (window.lucide && typeof lucide.createIcons === 'function') { lucide.createIcons(); }
+
+    // Validação visual da senha, se os campos existirem
+    const senhaInput = get('senhaCadastro');
+    if (senhaInput && typeof validatePassword === 'function') {
+      validatePassword(senhaInput.value || '');
+    }
+    if (typeof validatePasswordMatch === 'function') {
+      validatePasswordMatch();
+    }
   }
 
   if (document.readyState === 'loading') {
@@ -572,5 +791,134 @@ function switchTab(tab) {
 })();
 </script>
 
+<!-- NOVO: Funções globais para olho da senha e validação dinâmica -->
+<script>
+  // Mostrar/ocultar senha com atualização dos ícones Lucide
+  function togglePassword(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const button = input.nextElementSibling;
+    const icon = button?.querySelector('i');
+
+    if (input.type === 'password') {
+      input.type = 'text';
+      if (icon) icon.setAttribute('data-lucide', 'eye-off');
+    } else {
+      input.type = 'password';
+      if (icon) icon.setAttribute('data-lucide', 'eye');
+    }
+    if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
+  }
+
+  // Utilitário para marcar item da checklist
+  function setIndicator(id, ok) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('text-green-600', ok);
+    el.classList.toggle('text-red-500', !ok);
+    const icon = el.querySelector('i');
+    if (icon) icon.setAttribute('data-lucide', ok ? 'check-circle' : 'x-circle');
+  }
+
+  // Validação da força da senha (mínimo 6, letra, número, especial)
+  function validatePassword(pwd) {
+    const hasMin     = typeof pwd === 'string' && pwd.length >= 6;
+    const hasLetter  = /[A-Za-z]/.test(pwd || '');
+    const hasNumber  = /[0-9]/.test(pwd || '');
+    const hasSpecial = /[^A-Za-z0-9]/.test(pwd || '');
+
+    setIndicator('minLength', hasMin);
+    setIndicator('hasLetter', hasLetter);
+    setIndicator('hasNumber', hasNumber);
+    setIndicator('hasSpecial', hasSpecial);
+
+    if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
+    // Atualiza também o match entre senha e confirmar
+    validatePasswordMatch();
+  }
+
+  // Validação de confirmação de senha
+  function validatePasswordMatch() {
+    const a = document.getElementById('senhaCadastro')?.value || '';
+    const b = document.getElementById('confirmSenhaCadastro')?.value || '';
+    const el = document.getElementById('passwordMatch');
+    if (!el) return;
+
+    const ok = a !== '' && b !== '' && a === b;
+    el.classList.toggle('hidden', ok);
+    el.classList.toggle('text-red-500', !ok);
+
+    const icon = el.querySelector('i');
+    if (icon) icon.setAttribute('data-lucide', ok ? 'check-circle' : 'x-circle');
+
+    if (window.lucide && lucide.createIcons) { lucide.createIcons(); }
+  }
+
+  // ===== Cadastro: CEP auto-preenche + toggle edição manual =====
+(function() {
+  const cepEl = document.getElementById('cep');
+  const logradouroEl = document.getElementById('logradouro');
+  const numeroEl = document.getElementById('numero');
+  const bairroEl = document.getElementById('bairro');
+  const complementoEl = document.getElementById('complemento');
+  const cidadeEl = document.getElementById('cidade');
+  const ufEl = document.getElementById('uf');
+  const detailsDiv = document.getElementById('addressDetails');
+
+  // Toggle mostrar/ocultar campos de endereço
+  const toggleBtns = document.querySelectorAll('.toggleDetailsBtn');
+  if (toggleBtns && detailsDiv) {
+    toggleBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        detailsDiv.classList.toggle('hidden');
+      });
+    });
+  }
+
+  // Debounce util
+  function debounce(fn, wait) {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...args), wait);
+    };
+  }
+
+  async function fromCepCadastro(rawCep) {
+    const cep = String(rawCep || '').replace(/\D/g, '');
+    if (cep.length !== 8) return;
+
+    try {
+      const resp = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const data = await resp.json();
+      if (data?.erro) return;
+
+      // Preenche os campos a partir do CEP (pode editar manualmente depois)
+      if (logradouroEl) logradouroEl.value = data.logradouro ?? '';
+      if (bairroEl) bairroEl.value = data.bairro ?? '';
+      if (complementoEl) complementoEl.value = data.complemento ?? '';
+      if (cidadeEl) cidadeEl.value = data.localidade ?? '';
+      if (ufEl) ufEl.value = data.uf ?? '';
+    } catch (e) {
+      console.warn('Falha ao consultar ViaCEP', e);
+    }
+  }
+
+  if (cepEl) {
+    const onCepInput = debounce(() => fromCepCadastro(cepEl.value), 300);
+    cepEl.addEventListener('input', onCepInput);
+    cepEl.addEventListener('blur', () => fromCepCadastro(cepEl.value));
+    // Enter também dispara a consulta
+    cepEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        fromCepCadastro(cepEl.value);
+      }
+    });
+  }
+})();
+</script>
 </body>
 </html>
+
+

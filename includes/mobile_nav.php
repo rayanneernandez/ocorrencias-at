@@ -36,21 +36,38 @@ if (!function_exists('isActive')) {
 
 <style>
 #radci-mobile-nav {
-  position: fixed; bottom: 0; left: 0; right: 0;
-  height: 64px; background: #ffffff; border-top: 1px solid #e5e7eb;
-  display: flex; align-items: center; justify-content: space-around;
-  padding: 6px 8px; z-index: 9999;
+  /* Fixação com prioridade máxima e largura da viewport */
+  position: fixed !important;
+  bottom: 0; left: 0; right: 0;
+  width: 100vw !important;
+  max-width: 100vw; box-sizing: border-box;
+  background: #ffffff; border-top: 1px solid #e5e7eb;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  align-items: center; gap: 0;
+  min-height: 56px;
+  padding: 8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+  z-index: 2147483647; /* acima de qualquer overlay */
+  transform: none !important;
 }
-#radci-mobile-nav a {
-  flex: 1; text-align: center; text-decoration: none; color: #065f46; /* verde escuro */
-  font-size: 12px; font-weight: 600; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-}
-#radci-mobile-nav a .icon { width: 24px; height: 24px; margin-bottom: 4px; color: currentColor; }
 
-/* Removido: cores diferentes por item; todos em verde escuro */
-/* Estado ativo ainda mais escuro */
+#radci-mobile-nav a {
+  text-align: center; text-decoration: none; color: #065f46;
+  font-size: 11px; font-weight: 600;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; line-height: 1;
+}
+
+#radci-mobile-nav a .icon { width: 22px; height: 22px; margin-bottom: 2px; color: currentColor; }
+
+/* Estado ativo */
 #radci-mobile-nav a.active { color: #064e3b; }
 
+/* Em telas muito estreitas, prioriza ícones */
+@media (max-width: 360px) {
+  #radci-mobile-nav a span { display: none; }
+  #radci-mobile-nav { min-height: 48px; }
+}
+
+/* Oculta em desktop */
 @media (min-width: 768px) { #radci-mobile-nav { display: none; } }
 </style>

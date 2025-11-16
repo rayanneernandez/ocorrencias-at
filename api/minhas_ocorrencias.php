@@ -41,6 +41,14 @@ if (isset($_SESSION['usuario_id'])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/lucide@latest"></script>
+    <style>
+      /* Mantém espaço igual à altura do menu fixo */
+      html, body { min-height: 100vh; }
+      body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); overflow-x: hidden; }
+      /* Remove respiro adicional que gerava “vão” acima do menu */
+      .page-container { padding-bottom: 0; }
+      @media (max-width: 360px) { .page-container { padding-bottom: 1rem; } }
+    </style>
 </head>
 <body>
     <!-- Header -->
@@ -54,7 +62,7 @@ if (isset($_SESSION['usuario_id'])) {
     </header>
 
     <!-- Conteúdo -->
-    <div class="container mx-auto px-4 py-8 pb-24">
+    <div class="container mx-auto px-4 py-8 page-container">
         <?php if(isset($_SESSION['flash_success'])): ?>
             <div class="mb-6 bg-green-50 border border-green-200 text-green-800 rounded-lg p-4">
                 <?= htmlspecialchars($_SESSION['flash_success']) ?>
@@ -79,24 +87,53 @@ if (isset($_SESSION['usuario_id'])) {
         <?php else: ?>
             <div class="space-y-4">
                 <?php foreach($reports as $report): ?>
+                    <?php
+                        $titulo    = htmlspecialchars($report['category'] ?? 'Ocorrência', ENT_QUOTES);
+                        $descricao = nl2br(htmlspecialchars($report['descricao'] ?? '', ENT_QUOTES));
+                        $endereco  = htmlspecialchars($report['endereco'] ?? '', ENT_QUOTES);
+                        $dataFmt   = htmlspecialchars($report['data'] ?? '', ENT_QUOTES);
+
+                        $statusRaw     = strtolower(trim($report['status'] ?? ''));
+                        $statusDisplay = htmlspecialchars($report['status'] ?? '', ENT_QUOTES);
+                        $badgeClass = 'bg-gray-200 text-gray-800';
+                        if (in_array($statusRaw, ['em andamento','em análise','encaminhada'])) {
+                            $badgeClass = 'bg-green-100 text-green-800';
+                        } elseif (in_array($statusRaw, ['concluída','finalizada','resolvida'])) {
+                            $badgeClass = 'bg-blue-100 text-blue-800';
+                        } elseif (in_array($statusRaw, ['pendente','cancelada'])) {
+                            $badgeClass = 'bg-yellow-100 text-yellow-800';
+                        }
+
+                        $hasMedia = (intval($report['tem_imagens'] ?? 0) > 0) || !empty($report['arquivos']);
+                    ?>
                     <div class="bg-white rounded-xl shadow p-4 hover:shadow-lg transition">
                         <div class="flex items-start justify-between mb-3">
-                            <h3 class="text-lg font-semibold text-gray-900"><?= $report['category'] ?></h3>
-                            <span class="px-2 py-1 rounded text-xs <?= $report['status'] === 'pending' ? 'bg-gray-200 text-gray-800' : 'bg-green-100 text-green-800' ?>">
-                                <?= $report['status'] === 'pending' ? 'Pendente' : 'Em andamento' ?>
-                            </span>
+                            <h3 class="text-lg font-semibold text-gray-900"><?= $titulo ?></h3>
+                            <?php if (!empty($statusDisplay)): ?>
+                                <span class="px-2 py-1 rounded text-xs <?= $badgeClass ?>">
+                                    <?= $statusDisplay ?>
+                                </span>
+                            <?php endif; ?>
                         </div>
-                        <p class="text-sm text-gray-600 mb-2"><?= $report['description'] ?></p>
+
+                        <?php if (!empty($descricao)): ?>
+                            <p class="text-sm text-gray-600 mb-2"><?= $descricao ?></p>
+                        <?php endif; ?>
+
                         <div class="flex flex-wrap gap-4 text-xs text-gray-500">
-                            <div class="flex items-center">
-                                <i data-lucide="map-pin" class="w-3 h-3 mr-1"></i>
-                                <?= $report['address'] ?>
-                            </div>
-                            <div class="flex items-center">
-                                <i data-lucide="calendar" class="w-3 h-3 mr-1"></i>
-                                <?= $report['date'] ?>
-                            </div>
-                            <?php if(!empty($report['hasMedia'])): ?>
+                            <?php if (!empty($endereco)): ?>
+                                <div class="flex items-center">
+                                    <i data-lucide="map-pin" class="w-3 h-3 mr-1"></i>
+                                    Endereço: <?= $endereco ?>
+                                </div>
+                            <?php endif; ?>
+                            <?php if (!empty($dataFmt)): ?>
+                                <div class="flex items-center">
+                                    <i data-lucide="calendar" class="w-3 h-3 mr-1"></i>
+                                    Data: <?= $dataFmt ?>
+                                </div>
+                            <?php endif; ?>
+                            <?php if ($hasMedia): ?>
                                 <div class="flex items-center">
                                     <i data-lucide="image" class="w-3 h-3 mr-1"></i>
                                     Com mídia

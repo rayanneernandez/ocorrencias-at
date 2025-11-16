@@ -194,16 +194,44 @@ if (isset($_GET['pdf'])) {
 </head>
 <body class="bg-white min-h-screen">
   <header class="bg-green-700 text-white">
-    <div class="container mx-auto px-6 py-4 flex items-center justify-between">
-      <h1 class="text-xl font-bold">RADCI — Prefeito</h1>
-      <nav class="space-x-6">
+    <div class="container mx-auto px-6 py-4 flex items-center justify-between relative">
+      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-8 w-auto" />
+      <nav class="hidden md:flex items-center gap-6">
         <a href="prefeito_inicio.php" class="hover:underline">Início</a>
+        <a href="gestor_secretarios.php" class="hover:underline">Meus Secretários</a>
         <a href="ocorrencias.php" class="hover:underline">Ocorrências</a>
         <a href="relatorios_prefeito.php" class="hover:underline font-semibold">Relatórios</a>
+        <a href="criar_pesquisa.php" class="hover:underline">Criar Pesquisa</a>
+        <a href="pesquisa_respostas_prefeito.php" class="hover:underline">Respostas</a>
         <a href="login_cadastro.php?logout=1" class="hover:underline">Sair</a>
       </nav>
+      <button type="button" id="mobileMenuBtn" class="md:hidden inline-flex items-center gap-2 px-3 py-2 rounded-md bg-green-600 hover:bg-green-700">
+        <span class="sr-only">Abrir menu</span>
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h14M3 10h14M3 14h14"/></svg>
+      </button>
+      <div id="mobileMenu" class="absolute right-6 top-14 md:hidden hidden bg-white text-gray-800 rounded-lg shadow-lg border w-56">
+        <a href="prefeito_inicio.php" class="block px-4 py-2 hover:bg-gray-100">Início</a>
+        <a href="gestor_secretarios.php" class="block px-4 py-2 hover:bg-gray-100">Meus Secretários</a>
+        <a href="ocorrencias.php" class="block px-4 py-2 hover:bg-gray-100">Ocorrências</a>
+        <a href="relatorios_prefeito.php" class="block px-4 py-2 hover:bg-gray-100">Relatórios</a>
+        <a href="criar_pesquisa.php" class="block px-4 py-2 hover:bg-gray-100">Criar Pesquisa</a>
+        <a href="pesquisa_respostas_prefeito.php" class="block px-4 py-2 hover:bg-gray-100">Respostas</a>
+        <a href="login_cadastro.php?logout=1" class="block px-4 py-2 hover:bg-gray-100">Sair</a>
+      </div>
     </div>
   </header>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const btn = document.getElementById('mobileMenuBtn');
+      const menu = document.getElementById('mobileMenu');
+      if (btn && menu) {
+        btn.addEventListener('click', () => menu.classList.toggle('hidden'));
+        document.addEventListener('click', (e) => {
+          if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.add('hidden');
+        });
+      }
+    });
+  </script>
 
   <main class="container mx-auto px-6 py-8 max-w-6xl">
     <h2 class="text-2xl font-bold text-gray-900 mb-6">Relatórios</h2>

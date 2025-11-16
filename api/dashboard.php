@@ -1,5 +1,10 @@
 <?php
 session_start();
+// Permite resetar flags de pesquisa respondida via URL: ?reset=1
+if (isset($_GET['reset'])) {
+  unset($_SESSION['answered_surveys']);
+  unset($_SESSION['answered_priorities']);
+}
 require_once __DIR__ . '/../includes/db.php';
 require_once __DIR__ . '/notificacoes.php';
 
@@ -65,6 +70,8 @@ if ($userId > 0) {
         
         error_log("Dashboard - Encontradas " . count($results) . " ocorrências no banco");
         
+        $BASE_PATH = '/radci/';
+
         foreach ($results as $row) {
             error_log("Dashboard - Processando ocorrência ID: " . $row['id'] . ", Tipo: " . $row['categoria']);
             
@@ -75,7 +82,7 @@ if ($userId > 0) {
             // Processa arquivos para extrair imagens
             foreach ($arquivos as $arquivo) {
                 if (isset($arquivo['url']) && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $arquivo['url'])) {
-                    $imageUrl = '/' . $arquivo['url'];  // Ajustado para caminho absoluto
+                    $imageUrl = $BASE_PATH . ltrim($arquivo['url'], '/');
                     $todasImagens[] = $imageUrl;
                     if (empty($primeiraImagem)) {
                         $primeiraImagem = $imageUrl;
@@ -99,7 +106,7 @@ if ($userId > 0) {
                 'status' => $row['status'],
                 'detalhes' => $row['descricao'],
                 'imagens' => $todasImagens,
-                'tem_imagens' => $row['tem_imagens'] ?? 'Não',
+                'tem_imagens' => ($row['tem_imagens'] ?? 0) ? 'Sim' : 'Não',
                 'local' => $row['local'],
                 'lat' => $row['lat'],
                 'lng' => $row['lng']
@@ -117,16 +124,20 @@ if ($userId > 0) {
     error_log("Dashboard - Usuário não logado ou ID inválido");
 }
 
-// Verifica se usuário já respondeu pesquisa de prioridades (tabela pesquisa com idUsuario)
+// Verifica se usuário já respondeu pesquisa de prioridades (tabela persistente usuarios_prioridades)
 $hasAnsweredPriorities = false;
 try {
   if ($userId) {
-    $stmt = $pdo->prepare("SELECT 1 FROM pesquisa WHERE idUsuario = ? LIMIT 1");
+    $stmt = $pdo->prepare("SELECT 1 FROM usuarios_prioridades WHERE usuario_id = ? LIMIT 1");
     $stmt->execute([$userId]);
     $hasAnsweredPriorities = (bool)$stmt->fetchColumn();
   }
 } catch (Throwable $_) {
   $hasAnsweredPriorities = false;
+}
+// Fallback imediato por sessão: se acabou de responder, considera já respondido na mesma navegação
+if (!$hasAnsweredPriorities && !empty($_SESSION['answered_priorities'])) {
+  $hasAnsweredPriorities = true;
 }
 
 // Monta ordem das prioridades caso já tenha respondido
@@ -136,7 +147,7 @@ if ($hasAnsweredPriorities) {
     // Mapa: coluna do banco -> id da categoria do front
     $colToCat = [
       'saude'                 => 'saude',
-      'inovacao'              => 'inovacao',             // se não existir/for nula, será ignorado
+      'inovacao'              => 'inovacao',
       'mobilidade'            => 'mobilidade',
       'politicasPublicas'     => 'politicas',
       'riscosUrbanos'         => 'riscos',
@@ -150,7 +161,7 @@ if ($hasAnsweredPriorities) {
     ];
     $dbCols = array_keys($colToCat);
 
-    $sql  = "SELECT ".implode(',', $dbCols)." FROM pesquisa WHERE idUsuario = ? ORDER BY id DESC LIMIT 1";
+    $sql  = "SELECT ".implode(',', $dbCols)." FROM usuarios_prioridades WHERE usuario_id = ? LIMIT 1";
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$userId]);
     $row  = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
@@ -174,48 +185,138 @@ if ($hasAnsweredPriorities) {
         $prioridadesOrder[] = $catMap[$cid] ?? ucfirst($cid);
       }
     }
-  } catch (Throwable $_) {}
+  } catch (Throwable $_) {
+    // mantém $prioridadesOrder como []
+  }
 }
 
 $availableSurveys = [];
 $answeredSurveys  = [];
 
+// Resolve ID da pesquisa de prioridades (se existir no banco)
+$prioridadesDbId = 0;
+try {
+  $stmt = $pdo->prepare("SELECT id FROM pesquisa_meta WHERE sid = ? LIMIT 1");
+  $stmt->execute(['prioridades']);
+  $prioridadesDbId = intval($stmt->fetchColumn() ?: 0);
+} catch (Throwable $_) {}
+
 // Se respondeu prioridades, aparece como respondida, incluindo a ordem
 if ($hasAnsweredPriorities) {
   $answeredSurveys[] = [
     'sid'         => 'prioridades',
+    'db_id'       => $prioridadesDbId,
     'title'       => 'Pesquisa de Prioridades',
     'description' => 'Ordene as prioridades da sua cidade',
     'order'       => $prioridadesOrder
   ];
 }
 
-$surveyDir = __DIR__ . '/../uploads/surveys';
-if (is_dir($surveyDir)) {
-  foreach (glob($surveyDir . '/*.json') as $file) {
-    $meta = [];
-    try { $meta = json_decode(file_get_contents($file), true) ?: []; } catch (Throwable $_) {}
-    $sid   = $meta['sid'] ?? basename($file, '.json');
-    $title = $meta['title'] ?? ($meta['titulo'] ?? 'Pesquisa');
-    $desc  = $meta['description'] ?? ($meta['descricao'] ?? '');
+// Busca pesquisas (tabela) respondidas pelo usuário
+if ($userId) {
+  try {
+    $stmt = $pdo->prepare("\n      SELECT DISTINCT p.id AS db_id, p.titulo, p.descricao\n        FROM pesquisa_respostas r\n        JOIN pesquisa_meta p ON p.id = r.pesquisa_id\n       WHERE r.usuario_id = ?\n       ORDER BY p.id DESC\n    ");
+    $stmt->execute([$userId]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    if (!empty($_SESSION['answered_surveys'][$sid])) {
-      $answeredSurveys[] = ['sid'=>$sid,'title'=>$title,'description'=>$desc];
-    } else {
-      $availableSurveys[] = ['sid'=>$sid,'title'=>$title,'description'=>$desc];
+    foreach ($rows as $r) {
+      // Evita duplicar caso já esteja na lista por outro mecanismo
+      $answeredSurveys[] = [
+        'sid'         => 'db_' . intval($r['db_id']),
+        'db_id'       => intval($r['db_id']),
+        'title'       => $r['titulo'] ?? 'Pesquisa',
+        'description' => $r['descricao'] ?? ''
+      ];
     }
-  }
+  } catch (Throwable $_) {}
 }
+
+// NOVO: montar pesquisas disponíveis a partir da tabela 'pesquisa' (filtradas por perfil/cidade/UF)
+try {
+  $usuarioMunicipio = null; $usuarioUF = null;
+  if ($userId > 0) {
+    $usrStmt = $pdo->prepare("SELECT municipio, UPPER(uf) AS uf FROM usuarios WHERE id = ?");
+    $usrStmt->execute([$userId]);
+    $usrRow = $usrStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $usuarioMunicipio = trim($usrRow['municipio'] ?? '');
+    $usuarioUF = strtoupper(trim($usrRow['uf'] ?? ''));
+  }
+
+  $sql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n  ";
+  $params = [];
+
+  if ($usuarioMunicipio !== '') {
+    $sql .= " AND (cidade IS NULL OR cidade = '' OR cidade = ?)";
+    $params[] = $usuarioMunicipio;
+  } else {
+    $sql .= " AND (cidade IS NULL OR cidade = '')";
+  }
+
+  if ($usuarioUF !== '') {
+    $sql .= " AND (uf IS NULL OR uf = '' OR UPPER(uf) = ?)";
+    $params[] = $usuarioUF;
+  } else {
+    $sql .= " AND (uf IS NULL OR uf = '')";
+  }
+
+  $sql .= " AND id NOT IN (SELECT pesquisa_id FROM pesquisa_respostas WHERE usuario_id = ?)\n            ORDER BY id DESC\n            LIMIT 10";
+  $params[] = $userId;
+
+  $pStmt = $pdo->prepare($sql);
+  $pStmt->execute($params);
+  $pRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
+
+  foreach ($pRows as $r) {
+    $availableSurveys[] = [
+      'sid'         => $r['sid'] ?? null,
+      'db_id'       => intval($r['db_id']),
+      'title'       => $r['titulo'] ?? 'Pesquisa',
+      'description' => $r['descricao'] ?? ''
+    ];
+  }
+} catch (Throwable $_) {}
+
 
 // Métricas
 $totRegistradas = 0;
 $totConcluidas  = 0;
 $totAndamento   = 0;
 foreach ($ocorrencias as $o) {
-  $status = strtolower($o['status'] ?? 'registrada');
-  if (in_array($status, ['concluída', 'concluida'])) $totConcluidas++;
-  elseif (in_array($status, ['andamento', 'em andamento', 'em análise', 'em analise'])) $totAndamento++;
-  else $totRegistradas++;
+  $status = strtolower(trim($o['status'] ?? ''));
+  if (in_array($status, ['resolvida', 'concluida', 'concluída'])) {
+    $totConcluidas++;
+  } elseif (in_array($status, ['em_analise', 'em análise', 'em analise'])) {
+    $totAndamento++;
+  } else {
+    // Registradas inclui encaminhada, aberta, cancelada e quaisquer outros
+    $totRegistradas++;
+  }
+}
+
+// KPIs reais (contagem completa no banco para o usuário)
+$kpiTotal         = 0;
+$kpiConcluidas    = 0;
+$kpiEmAnalise     = 0;
+$kpiEncaminhadas  = 0;
+
+if ($userId > 0) {
+  try {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM ocorrencias WHERE usuario_id = ?");
+    $stmt->execute([$userId]);
+    $kpiTotal = (int)$stmt->fetchColumn();
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM ocorrencias WHERE usuario_id = ? AND status IN ('resolvida','concluida','concluída')");
+    $stmt->execute([$userId]);
+    $kpiConcluidas = (int)$stmt->fetchColumn();
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM ocorrencias WHERE usuario_id = ? AND status IN ('em_analise','em análise','em analise')");
+    $stmt->execute([$userId]);
+    $kpiEmAnalise = (int)$stmt->fetchColumn();
+
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM ocorrencias WHERE usuario_id = ? AND status = 'encaminhada'");
+    $stmt->execute([$userId]);
+    $kpiEncaminhadas = (int)$stmt->fetchColumn();
+  } catch (Throwable $_) {}
 }
 ?>
 <!DOCTYPE html>
@@ -795,6 +896,7 @@ foreach ($ocorrencias as $o) {
   @media (min-width: 768px) {
     .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .md\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .md\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .md\:px-10 { padding-left: 2.5rem; padding-right: 2.5rem; }
     .md\:hidden { display: none; }
     .md\:flex { display: flex; }
@@ -802,6 +904,7 @@ foreach ($ocorrencias as $o) {
 
   @media (min-width: 1024px) {
     .lg\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .lg\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   }
 
   /* Responsivo específico adicional */
@@ -979,7 +1082,7 @@ foreach ($ocorrencias as $o) {
 
 <header class="bg-green-700 sticky top-0 z-30 shadow">
   <div class="px-4 py-3 flex items-center justify-between text-white">
-    <h1 class="text-lg font-bold">RADCI</h1>
+    <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-9 md:h-10 w-auto">
     <div class="flex items-center gap-3">
       <button id="bellBtn" class="p-2 rounded hover:bg-white/20 relative" aria-label="Notificações">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -1045,6 +1148,24 @@ foreach ($ocorrencias as $o) {
       </svg>
       <span>Pesquisa respondida com sucesso!</span>
     </div>
+    <script>
+      // Remove o parâmetro ?answered da URL para não reaparecer no refresh
+      (function() {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('answered')) {
+          url.searchParams.delete('answered');
+          window.history.replaceState({}, document.title, url.pathname + url.search);
+        }
+        const toast = document.getElementById('answeredToast');
+        if (toast) {
+          setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(-50%) translateY(-20px)';
+            setTimeout(() => toast.remove(), 300);
+          }, 3000);
+        }
+      })();
+    </script>
   <?php endif; ?>
 
   <section class="mb-4 md:mb-6">
@@ -1153,7 +1274,7 @@ foreach ($ocorrencias as $o) {
       <div class="bg-white rounded-2xl shadow p-6 border border-gray-200">
         <h3 class="text-lg font-bold text-gray-900 mb-1">Pesquisa de Prioridades</h3>
         <p class="text-sm text-gray-600 mb-4">Ajude-nos a entender quais são as prioridades da sua cidade. Sua opinião é muito importante!</p>
-        <button onclick="location.href='prioridades.php'" class="w-full bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">Responder Pesquisa</button>
+        <a href="<?= $prioridadesDbId ? ('pesquisa_responder.php?id=' . urlencode($prioridadesDbId)) : 'pesquisa_responder.php?sid=prioridades' ?>" class="w-full inline-block text-center bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">Responder Pesquisa</a>
       </div>
     </section>
   <?php elseif (!empty($availableSurveys)): ?>
@@ -1162,7 +1283,7 @@ foreach ($ocorrencias as $o) {
       <div class="bg-white rounded-2xl shadow p-6 border border-gray-200">
         <h3 class="text-lg font-bold text-gray-900 mb-1"><?= htmlspecialchars($sv['title']) ?></h3>
         <?php if (!empty($sv['description'])): ?><p class="text-sm text-gray-600 mb-4"><?= htmlspecialchars($sv['description']) ?></p><?php endif; ?>
-        <button onclick="location.href='prioridades.php?survey_id=<?= urlencode($sv['sid']) ?>'" class="w-full bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">Responder Pesquisa</button>
+        <a href="<?= !empty($sv['db_id']) ? ('pesquisa_responder.php?id=' . urlencode($sv['db_id'])) : ('pesquisa_responder.php?sid=' . urlencode($sv['sid'])) ?>" class="w-full inline-block text-center bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">Responder Agora</a>
       </div>
     </section>
   <?php endif; ?>
@@ -1187,7 +1308,7 @@ foreach ($ocorrencias as $o) {
         <article
           class="bg-white rounded-xl shadow border border-gray-200 p-4 cursor-pointer flex flex-col min-w-[280px] max-w-[280px] flex-shrink-0"
           style="scroll-snap-align: start;"
-          data-titulo="<?= htmlspecialchars($o['descricao'] ?? 'Ocorrência') ?>"
+          data-titulo="<?= htmlspecialchars($o['categoria'] ?? 'Ocorrência') ?>"
           data-numero="<?= htmlspecialchars($o['numero'] ?? 'N/A') ?>"
           data-categoria="<?= htmlspecialchars($o['categoria'] ?? '') ?>"
           data-local="<?= htmlspecialchars($o['local'] ?? 'Local não informado') ?>"
@@ -1208,10 +1329,33 @@ foreach ($ocorrencias as $o) {
               </div>
             </div>
             <div class="flex items-center justify-between">
-              <div class="text-sm font-medium text-gray-900 flex-1 mr-2"><?= htmlspecialchars($o['descricao']) ?></div>
-              <span class="text-[11px] px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 whitespace-nowrap"><?= htmlspecialchars($o['status']) ?></span>
+              <div class="text-sm font-medium text-gray-900 flex-1 mr-2"><?= htmlspecialchars($o['categoria'] ?? 'Ocorrência') ?></div>
+              <?php
+                $st = strtolower(trim($o['status'] ?? ''));
+                $badgeClass = 'bg-gray-100 text-gray-700';
+                if (in_array($st, ['resolvida', 'concluida', 'concluída'])) {
+                  $badgeClass = 'bg-green-100 text-green-700';
+                } elseif ($st === 'encaminhada') {
+                  $badgeClass = 'bg-blue-100 text-blue-700';
+                } elseif (in_array($st, ['em_analise', 'em análise', 'em analise'])) {
+                  $badgeClass = 'bg-yellow-100 text-yellow-700';
+                } elseif ($st === 'cancelada') {
+                  $badgeClass = 'bg-red-100 text-red-700';
+                }
+              ?>
+              <span class="text-[11px] px-2 py-1 rounded-full <?= $badgeClass ?> whitespace-nowrap">
+                <?= htmlspecialchars($o['status'] ?? '') ?>
+              </span>
             </div>
-            <div class="text-xs text-gray-500"><?= htmlspecialchars($o['categoria']) ?></div>
+            <?php
+              $desc = trim($o['descricao'] ?? '');
+              $descShort = function_exists('mb_strimwidth')
+                ? mb_strimwidth($desc, 0, 20, '...', 'UTF-8')
+                : (strlen($desc) > 20 ? substr($desc, 0, 20) . '...' : $desc);
+            ?>
+            <div class="text-xs text-gray-500 whitespace-nowrap overflow-hidden text-ellipsis">
+              <?= htmlspecialchars($descShort) ?>
+            </div>
             <div class="flex items-center justify-between text-xs text-gray-400">
               <span><?= htmlspecialchars($o['data']) ?></span>
               <span class="flex items-center gap-1">
@@ -1266,7 +1410,7 @@ foreach ($ocorrencias as $o) {
           <?php if (!empty($sv['description'])): ?>
             <p class="text-xs text-gray-600 mb-3"><?= htmlspecialchars($sv['description']) ?></p>
           <?php endif; ?>
-          
+
           <?php if (!empty($sv['order'])): ?>
             <div class="mb-3">
               <p class="text-xs font-medium text-gray-700 mb-2">Suas prioridades:</p>
@@ -1280,11 +1424,18 @@ foreach ($ocorrencias as $o) {
               </ol>
             </div>
           <?php endif; ?>
-          
-          <button onclick="location.href='prioridades.php?survey_id=<?= urlencode($sv['sid']) ?>&readonly=1'" 
-                  class="w-full bg-gray-100 text-gray-700 py-2 rounded-md hover:bg-gray-200 text-sm font-medium">
-            Ver Detalhes
-          </button>
+
+          <?php
+            // Decide o destino do botão "Ver Detalhes"
+            $detailsHref = 'javascript:void(0)';
+            if (!empty($sv['db_id'])) {
+              $detailsHref = 'pesquisa_detalhes.php?id=' . urlencode($sv['db_id']);
+            } elseif (!empty($sv['sid']) && $sv['sid'] === 'prioridades') {
+              // Abre a visualização dedicada das prioridades
+              $detailsHref = 'prioridades.php?readonly=1';
+            }
+          ?>
+          <a href="<?= $detailsHref ?>" class="w-full inline-block text-center bg-gray-100 text-gray-700 py-2 rounded-md hover:bg-gray-200 text-sm font-medium">Ver Detalhes</a>
         </article>
       <?php endforeach; ?>
     </div>
@@ -1295,18 +1446,22 @@ foreach ($ocorrencias as $o) {
 
   <section class="mt-6">
     <h3 class="text-lg font-bold text-gray-800 mb-3">Dashboard</h3>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 3h18v4H3z"/><path d="M7 7v14"/><path d="M17 7v10"/></svg>
-        <div><div class="text-xs text-gray-500">Registradas</div><div class="text-xl font-bold"><?= $totRegistradas ?></div></div>
+        <div><div class="text-xs text-gray-500">Registradas</div><div class="text-xl font-bold"><?= $kpiTotal ?></div></div>
       </div>
       <div class="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
-        <div><div class="text-xs text-gray-500">Concluídas</div><div class="text-xl font-bold"><?= $totConcluidas ?></div></div>
+        <div><div class="text-xs text-gray-500">Concluídas</div><div class="text-xl font-bold"><?= $kpiConcluidas ?></div></div>
       </div>
       <div class="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24"><path fill="#facc15" d="M12 2L1 21h22L12 2z M11 16h2v2h-2zm0-7h2v5h-2z"/></svg>
-        <div><div class="text-xs text-gray-500">Em Análise</div><div class="text-xl font-bold"><?= $totAndamento ?></div></div>
+        <div><div class="text-xs text-gray-500">Em Análise</div><div class="text-xl font-bold"><?= $kpiEmAnalise ?></div></div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-3">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/><path d="M4 12h9"/></svg>
+        <div><div class="text-xs text-gray-500">Encaminhadas</div><div class="text-xl font-bold"><?= $kpiEncaminhadas ?></div></div>
       </div>
     </div>
   </section>
@@ -1327,7 +1482,7 @@ foreach ($ocorrencias as $o) {
       </button>
     </div>
 
-    <div class="modal-body">
+    <div class="modal-body overflow-x-hidden">
       <div class="grid md:grid-cols-2 gap-6">
         <div class="space-y-4">
           <div class="bg-gray-50 rounded-lg p-4">
@@ -1346,10 +1501,6 @@ foreach ($ocorrencias as $o) {
             <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Tem Imagens</div>
             <div class="font-semibold text-gray-900" id="evTemImagens">—</div>
           </div>
-          <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Descrição</div>
-            <div class="text-gray-800 leading-relaxed" id="evDescricao">—</div>
-          </div>
         </div>
         <div class="space-y-4">
           <div id="evMapWrap" class="rounded-lg overflow-hidden border border-gray-200 h-64">
@@ -1359,6 +1510,13 @@ foreach ($ocorrencias as $o) {
             <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">Evidências</div>
             <div id="evImages" class="grid grid-cols-2 gap-3"></div>
           </div>
+        </div>
+
+        <div class="md:col-span-2 bg-gray-50 rounded-lg p-4">
+          <span class="text-gray-600">Descrição</span>
+          <div id="evDescricao"
+               class="font-medium text-gray-900 break-words whitespace-normal"
+               style="overflow-wrap:anywhere; word-break: break-word;">—</div>
         </div>
       </div>
     </div>
@@ -1390,22 +1548,156 @@ foreach ($ocorrencias as $o) {
     document.body.style.overflow = '';
   }
 
-  // Modal de visualização de imagem
-  function openImageModal(imageSrc) {
-    const imageModal = document.createElement('div');
-    imageModal.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4';
-    imageModal.innerHTML = `
-      <div class="relative max-w-4xl max-h-full">
-        <button class="absolute top-4 right-4 text-white text-2xl hover:text-gray-300 z-10" onclick="this.parentElement.parentElement.remove()">×</button>
-        <img src="${imageSrc}" class="max-w-full max-h-full object-contain rounded-lg" alt="Imagem ampliada">
+  // Viewer em modal branco (mesmo estilo do modal de detalhes)
+  let currentImages = [];
+  function openImageModal(startIndex) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'block';
+    modal.innerHTML = `
+      <div class="modal-content" style="width:95%; max-width:900px; max-height:80vh; overflow:hidden;">
+        <div class="modal-header">
+          <h2 class="font-bold text-gray-900 text-lg">Visualização</h2>
+          <button type="button" id="ivClose" class="close" aria-label="Fechar">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body relative flex items-center justify-center"
+             style="height:calc(60vh - 72px); padding-top:12px; padding-bottom:12px;">
+          <button id="ivPrev" class="absolute left-4 top-1/2 -translate-y-1/2 px-3 py-2 bg-white/70 text-gray-900 rounded shadow hover:bg-white">‹</button>
+          <div id="ivStage"
+               class="w-full h-full overflow-hidden flex items-center justify-center bg-white"
+               style="touch-action:none; padding:24px; border-radius:12px; box-sizing:border-box;">
+            <img id="ivImg" alt="Imagem ampliada"
+                 style="
+                   max-width: 75%;
+                   max-height: 75%;
+                   width: auto;
+                   height: auto;
+                   object-fit: contain;
+                   border-radius: 8px;
+                   transform: translate(0px, 0px) scale(0.85);
+                   transform-origin: center center;
+                   cursor: default;
+                 " />
+          </div>
+          <button id="ivNext" class="absolute right-4 top-1/2 -translate-y-1/2 px-3 py-2 bg-white/70 text-gray-900 rounded shadow hover:bg-white">›</button>
+        </div>
       </div>
     `;
-    imageModal.addEventListener('click', (e) => {
-      if (e.target === imageModal) {
-        imageModal.remove();
-      }
+    document.body.appendChild(modal);
+    document.body.style.overflow = 'hidden';
+
+    const ivImg    = modal.querySelector('#ivImg');
+    const ivStage  = modal.querySelector('#ivStage');
+    const btnPrev  = modal.querySelector('#ivPrev');
+    const btnNext  = modal.querySelector('#ivNext');
+    const btnClose = modal.querySelector('#ivClose');
+
+    let index = typeof startIndex === 'number' ? startIndex : 0;
+    const safeIndex = (i) => currentImages.length ? (i + currentImages.length) % currentImages.length : 0;
+
+    // Estado de zoom/pan com escala base menor
+    const baseScale = 0.85;
+    let scale = baseScale, tx = 0, ty = 0;
+    let dragging = false, lastX = 0, lastY = 0;
+    let pinchActive = false, pinchStartDist = 0;
+
+    const applyTransform = () => {
+      ivImg.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+      ivImg.style.cursor = scale > 1 ? (dragging ? 'grabbing' : 'grab') : 'default';
+    };
+    const clampScale = (s) => Math.min(5, Math.max(0.5, s));
+
+    const render = () => {
+      ivImg.src = currentImages[safeIndex(index)];
+      scale = baseScale; tx = 0; ty = 0; dragging = false; pinchActive = false;
+      applyTransform();
+    };
+    render();
+
+    // Zoom – roda do mouse
+    ivStage.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const dir = e.deltaY < 0 ? 1 : -1;
+      scale = clampScale(scale + dir * 0.25);
+      applyTransform();
+    }, { passive: false });
+
+    // Duplo clique alterna entre base (0.85) e 2x
+    ivStage.addEventListener('dblclick', () => {
+      scale = scale <= baseScale ? 2 : baseScale;
+      tx = 0; ty = 0;
+      applyTransform();
     });
-    document.body.appendChild(imageModal);
+
+    // Pan com mouse quando ampliada
+    ivStage.addEventListener('mousedown', (e) => {
+      if (scale <= 1) return;
+      dragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      ivImg.style.cursor = 'grabbing';
+    });
+    const onMouseMove = (e) => {
+      if (!dragging) return;
+      tx += e.clientX - lastX;
+      ty += e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      applyTransform();
+    };
+    const onMouseUp = () => {
+      dragging = false;
+      ivImg.style.cursor = scale > 1 ? 'grab' : 'default';
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    // Pinch zoom e pan no touch
+    const getDist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    ivStage.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        pinchActive = true;
+        pinchStartDist = getDist(e.touches);
+      } else if (e.touches.length === 1 && scale > 1) {
+        dragging = true;
+        lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+      }
+    }, { passive: true });
+    ivStage.addEventListener('touchmove', (e) => {
+      if (pinchActive && e.touches.length === 2) {
+        e.preventDefault();
+        const dist = getDist(e.touches);
+        const factor = dist / pinchStartDist;
+        scale = clampScale(scale * factor);
+        pinchStartDist = dist;
+        applyTransform();
+      } else if (dragging && e.touches.length === 1) {
+        e.preventDefault();
+        const x = e.touches[0].clientX, y = e.touches[0].clientY;
+        tx += x - lastX; ty += y - lastY;
+        lastX = x; lastY = y;
+        applyTransform();
+      }
+    }, { passive: false });
+    ivStage.addEventListener('touchend', () => { pinchActive = false; dragging = false; }, { passive: true });
+
+    // Navegação e fechamento
+    const close = () => {
+      modal.remove();
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', escListener);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    btnClose.addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    const escListener = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', escListener);
+
+    btnPrev.addEventListener('click', () => { index = safeIndex(index - 1); render(); });
+    btnNext.addEventListener('click', () => { index = safeIndex(index + 1); render(); });
   }
 
   function populateFromArticle(article) {
@@ -1423,13 +1715,19 @@ foreach ($ocorrencias as $o) {
     let imgs = [];
     try { imgs = JSON.parse(imgsData); } catch(_) {}
     const first = article.dataset.imagem || '';
-    const all = first ? [first, ...imgs] : imgs;
-    all.slice(0, 6).forEach(src => {
+
+    currentImages = (first ? [first, ...imgs] : imgs).slice(0, 12);
+
+    // Miniaturas que abrem o visualizador ao clicar
+    currentImages.forEach((src, i) => {
       const img = document.createElement('img');
       img.src = src;
       img.alt = 'evidência';
-      img.className = 'w-full h-24 object-cover rounded cursor-pointer hover:opacity-80 transition-opacity';
-      img.addEventListener('click', () => openImageModal(src));
+      img.style.width = '100%';
+      img.style.height = '96px';
+      img.style.objectFit = 'cover';
+      img.className = 'rounded cursor-pointer hover:opacity-80 transition-opacity';
+      img.addEventListener('click', () => openImageModal(i));
       evImages.appendChild(img);
     });
 
@@ -1602,12 +1900,9 @@ foreach ($ocorrencias as $o) {
             </svg>
             Aguardando resposta
           </small>
-          <button onclick="location.href='prioridades.php'" class="mt-2">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
+          <a href="<?= $prioridadesDbId ? ('pesquisa_responder.php?id=' . urlencode($prioridadesDbId)) : 'pesquisa_responder.php?sid=prioridades' ?>" class="mt-2 inline-block">
             Responder Agora
-          </button>
+          </a>
         </div>
       </div>`;
     <?php endif; ?>
@@ -1630,9 +1925,9 @@ foreach ($ocorrencias as $o) {
             <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
             </svg>
-            Disponível agora
+            Agora disponível
           </small>
-          <button onclick="location.href='prioridades.php?survey_id=<?= urlencode($sv['sid']) ?>'">
+          <button onclick="location.href='<?= !empty($sv['db_id']) ? ('pesquisa_responder.php?id=' . urlencode($sv['db_id'])) : ('pesquisa_responder.php?sid=' . urlencode($sv['sid'])) ?>'" class="w-full bg-green-600 text-white py-3 rounded-md hover:bg-green-700 font-semibold">
             <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
@@ -1807,10 +2102,14 @@ foreach ($ocorrencias as $o) {
 
 <script>
 (function() {
-  // Oculta o toast de confirmação após 5s
+  // Oculta o toast de confirmação após 3s com animação
   const toast = document.getElementById('answeredToast');
   if (toast) {
-    setTimeout(() => toast.remove(), 5000);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(-50%) translateY(-20px)';
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   }
 })();
 </script>

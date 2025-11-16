@@ -32,7 +32,9 @@ class NotificacaoManager {
     
     private function verificarPreferenciasNotificacao($usuarioId, $tipo) {
         $stmt = $this->pdo->prepare("
-            SELECT notif_ocorrencias, notif_novidades 
+            SELECT 
+                receber_email  AS notif_ocorrencias, 
+                receber_push   AS notif_novidades
             FROM usuarios_preferencias 
             WHERE usuario_id = ?
         ");
@@ -99,7 +101,8 @@ class NotificacaoManager {
     }
     
     public function notificarNovaPesquisa($pesquisaId, $titulo, $descricao = '') {
-        $sql = "SELECT id FROM usuarios WHERE ativo = 1";
+        // Remove filtro por u.ativo (a coluna não existe no seu schema atual)
+        $sql = "SELECT id FROM usuarios";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute();
         
@@ -112,7 +115,8 @@ class NotificacaoManager {
                 'Nova Pesquisa Disponível',
                 $descricao ?: "Uma nova pesquisa está disponível: {$titulo}",
                 $pesquisaId,
-                "prioridades.php?survey_id={$pesquisaId}",
+                // Corrigido: vai para a página de resposta por ID (não prioridades)
+                "pesquisa_responder.php?id={$pesquisaId}",
                 $icone
             );
         }
@@ -121,8 +125,8 @@ class NotificacaoManager {
     public function enviarLembretePesquisaPendente() {
         $sql = "SELECT u.id, u.nome 
                 FROM usuarios u 
-                LEFT JOIN pesquisa p ON p.idUsuario = u.id 
-                WHERE p.id IS NULL AND u.ativo = 1";
+                LEFT JOIN pesquisa p ON p.usuario_id = u.id 
+                WHERE p.id IS NULL";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute();
         

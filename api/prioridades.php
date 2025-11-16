@@ -3,67 +3,120 @@ session_start();
 require_once __DIR__ . '/../includes/db.php';
 $pdo = get_pdo();
 
-// Verifica se está em modo somente leitura
+// Verifica se está em modo somente leitura (definir antes de usar no POST)
 $readonly = isset($_GET['readonly']) && $_GET['readonly'] == '1';
+
+// Define o ID do usuário para uso geral (POST e readonly)
+$userId = intval($_SESSION['usuario_id'] ?? 0);
+
+// Inicializa a variável $ids para evitar o warning
+$ids = [];
 
 // Trata o POST antes de qualquer saída de HTML para permitir header()
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_priorities']) && !$readonly) {
-    $userId = intval($_SESSION['usuario_id'] ?? 0);
     $orderJson = $_POST['order'] ?? '[]';
     $ids = json_decode($orderJson, true);
     if (!is_array($ids)) { $ids = []; }
 
-    // Mapeia IDs do front para colunas da sua tabela `pesquisa` (nomes reais)
+    // Mapeia o ID de cada categoria para a coluna do banco
     $idToColumn = [
-        'saude'           => 'saude',
-        'inovacao'        => 'inovacao',           
-        'mobilidade'      => 'mobilidade',
-        'politicas'       => 'politicasPublicas',
-        'riscos'          => 'riscosUrbanos',
-        'sustentabilidade'=> 'sustentabilidade',
-        'planejamento'    => 'planejamentoUrbano',
-        'educacao'        => 'educacao',
-        'meio'            => 'meioAmbiente',
-        'infraestrutura'  => 'infraestruturaCidade',
-        'seguranca'       => 'segurancaPublica',
-        'energias'        => 'energiasInteligentes',
+        'saude'            => 'saude',
+        'inovacao'         => 'inovacao',
+        'mobilidade'       => 'mobilidade',
+        'politicas'        => 'politicasPublicas',
+        'riscos'           => 'riscosUrbanos',
+        'sustentabilidade' => 'sustentabilidade',
+        'planejamento'     => 'planejamentoUrbano',
+        'educacao'         => 'educacao',
+        'meio'             => 'meioAmbiente',
+        'infraestrutura'   => 'infraestruturaCidade',
+        'seguranca'        => 'segurancaPublica',
+        'energias'         => 'energiasInteligentes',
     ];
 
-    // Lista de colunas existentes na tabela (adapta ao seu banco)
-    $cols = [];
-    try {
-        $colRows = $pdo->query("SHOW COLUMNS FROM pesquisa")->fetchAll();
-        foreach ($colRows as $cr) { $cols[] = $cr['Field']; }
-    } catch (Throwable $_) {}
+    // Cria a tabela de prioridades do usuário, caso não exista
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS usuarios_prioridades (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            usuario_id INT NOT NULL UNIQUE,
+            saude TINYINT NULL,
+            inovacao TINYINT NULL,
+            mobilidade TINYINT NULL,
+            politicasPublicas TINYINT NULL,
+            riscosUrbanos TINYINT NULL,
+            sustentabilidade TINYINT NULL,
+            planejamentoUrbano TINYINT NULL,
+            educacao TINYINT NULL,
+            meioAmbiente TINYINT NULL,
+            infraestruturaCidade TINYINT NULL,
+            segurancaPublica TINYINT NULL,
+            energiasInteligentes TINYINT NULL,
+            data_registro DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
 
-    // Constrói o ranking 1..N e só usa colunas que realmente existem
-    $valuesByColumn = [];
+    // Constrói um mapa de posições: categoria -> ranking 1..N
+    $pos = [];
     foreach ($ids as $rank => $catId) {
-        $col = $idToColumn[$catId] ?? null;
-        if ($col && in_array($col, $cols)) {
-            $valuesByColumn[$col] = $rank + 1; // ranking 1-based
-        }
+        $pos[$catId] = $rank + 1;
     }
 
-    // Monta INSERT dinâmico em `pesquisa`
-    if ($userId && !empty($valuesByColumn)) {
-        $insertCols   = ['idUsuario'];
-        $placeholders = ['?'];
-        $vals         = [$userId];
+    // Monta valores para cada coluna
+    $vals = [
+        'usuario_id'          => $userId,
+        'saude'               => $pos['saude']            ?? null,
+        'inovacao'            => $pos['inovacao']         ?? null,
+        'mobilidade'          => $pos['mobilidade']       ?? null,
+        'politicasPublicas'   => $pos['politicas']        ?? null,
+        'riscosUrbanos'       => $pos['riscos']           ?? null,
+        'sustentabilidade'    => $pos['sustentabilidade'] ?? null,
+        'planejamentoUrbano'  => $pos['planejamento']     ?? null,
+        'educacao'            => $pos['educacao']         ?? null,
+        'meioAmbiente'        => $pos['meio']             ?? null,
+        'infraestruturaCidade'=> $pos['infraestrutura']   ?? null,
+        'segurancaPublica'    => $pos['seguranca']        ?? null,
+        'energiasInteligentes'=> $pos['energias']         ?? null,
+    ];
 
-        foreach ($valuesByColumn as $col => $val) {
-            $insertCols[]   = $col;
-            $placeholders[] = '?';
-            $vals[]         = $val;
-        }
-        if (in_array('dataRegistro', $cols)) {
-            $insertCols[]   = 'dataRegistro';
-            $placeholders[] = 'NOW()'; // literal
-        }
-
-        $sql = "INSERT INTO pesquisa (" . implode(',', $insertCols) . ") VALUES (" . implode(',', $placeholders) . ")";
+    if ($userId) {
+        // Upsert de prioridades por usuário
+        $sql = "
+            INSERT INTO usuarios_prioridades
+                (usuario_id, saude, inovacao, mobilidade, politicasPublicas, riscosUrbanos, sustentabilidade,
+                 planejamentoUrbano, educacao, meioAmbiente, infraestruturaCidade, segurancaPublica, energiasInteligentes)
+            VALUES
+                (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON DUPLICATE KEY UPDATE
+                saude = VALUES(saude),
+                inovacao = VALUES(inovacao),
+                mobilidade = VALUES(mobilidade),
+                politicasPublicas = VALUES(politicasPublicas),
+                riscosUrbanos = VALUES(riscosUrbanos),
+                sustentabilidade = VALUES(sustentabilidade),
+                planejamentoUrbano = VALUES(planejamentoUrbano),
+                educacao = VALUES(educacao),
+                meioAmbiente = VALUES(meioAmbiente),
+                infraestruturaCidade = VALUES(infraestruturaCidade),
+                segurancaPublica = VALUES(segurancaPublica),
+                energiasInteligentes = VALUES(energiasInteligentes),
+                data_registro = CURRENT_TIMESTAMP
+        ";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute($vals);
+        $stmt->execute([
+            $vals['usuario_id'],
+            $vals['saude'],
+            $vals['inovacao'],
+            $vals['mobilidade'],
+            $vals['politicasPublicas'],
+            $vals['riscosUrbanos'],
+            $vals['sustentabilidade'],
+            $vals['planejamentoUrbano'],
+            $vals['educacao'],
+            $vals['meioAmbiente'],
+            $vals['infraestruturaCidade'],
+            $vals['segurancaPublica'],
+            $vals['energiasInteligentes'],
+        ]);
     }
 
     // Marca sessão para esconder no Dashboard e redireciona com confirmação
@@ -72,6 +125,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_priorities']) && 
     exit;
 }
 
+
+$cols = [];
+try {
+    $colRows = $pdo->query("SHOW COLUMNS FROM pesquisa")->fetchAll();
+    foreach ($colRows as $cr) { $cols[] = $cr['Field']; }
+} catch (Throwable $_) {}
+
+// REMOVIDO: bloco legado que usava $ids fora do POST e fazia INSERT em `pesquisa`
+// Isso causava "Undefined variable $ids" e "foreach() argument must be of type array|object" no GET.
+
+// Fluxo segue direto para a renderização
 $primeiroNome = isset($_SESSION['usuario_nome']) ? explode(" ", trim($_SESSION['usuario_nome']))[0] : "Usuário";
 
 $categories = [
@@ -88,8 +152,44 @@ $categories = [
     ['id'=>'seguranca','name'=>'Segurança Pública','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#F44336"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>'],
     ['id'=>'energias','name'=>'Energias Inteligentes','icon'=>'<svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="#FFEB3B"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>'],
 ];
-?>
 
+// Reordenar pela resposta salva em modo somente leitura
+if ($readonly && $userId) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT saude, inovacao, mobilidade, politicasPublicas, riscosUrbanos, sustentabilidade,
+                   planejamentoUrbano, educacao, meioAmbiente, infraestruturaCidade, segurancaPublica,
+                   energiasInteligentes
+              FROM usuarios_prioridades
+             WHERE usuario_id = ?
+             LIMIT 1
+        ");
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $posMap = [
+            'saude'            => isset($row['saude']) ? intval($row['saude']) : null,
+            'inovacao'         => isset($row['inovacao']) ? intval($row['inovacao']) : null,
+            'mobilidade'       => isset($row['mobilidade']) ? intval($row['mobilidade']) : null,
+            'politicas'        => isset($row['politicasPublicas']) ? intval($row['politicasPublicas']) : null,
+            'riscos'           => isset($row['riscosUrbanos']) ? intval($row['riscosUrbanos']) : null,
+            'sustentabilidade' => isset($row['sustentabilidade']) ? intval($row['sustentabilidade']) : null,
+            'planejamento'     => isset($row['planejamentoUrbano']) ? intval($row['planejamentoUrbano']) : null,
+            'educacao'         => isset($row['educacao']) ? intval($row['educacao']) : null,
+            'meio'             => isset($row['meioAmbiente']) ? intval($row['meioAmbiente']) : null,
+            'infraestrutura'   => isset($row['infraestruturaCidade']) ? intval($row['infraestruturaCidade']) : null,
+            'seguranca'        => isset($row['segurancaPublica']) ? intval($row['segurancaPublica']) : null,
+            'energias'         => isset($row['energiasInteligentes']) ? intval($row['energiasInteligentes']) : null,
+        ];
+
+        usort($categories, function($a, $b) use ($posMap) {
+            $pa = $posMap[$a['id']] ?? PHP_INT_MAX;
+            $pb = $posMap[$b['id']] ?? PHP_INT_MAX;
+            return $pa <=> $pb;
+        });
+    } catch (Throwable $_) {}
+}
+?>
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
@@ -153,57 +253,63 @@ $categories = [
 
 <script>
 <?php if (!$readonly): ?>
-const categoryList = document.getElementById('categoryList');
-let draggedItem = null;
+(function () {
+  if (window.__PRIORIDADES_DND_INIT__) return;
+  window.__PRIORIDADES_DND_INIT__ = true;
 
-function updateNumbers() {
-  document.querySelectorAll('.category-card').forEach((card, idx) => {
-    card.querySelector('.position-num').textContent = idx + 1;
-  });
-}
+  const categoryList = document.getElementById('categoryList');
+  let draggedItem = null;
 
-categoryList.addEventListener('dragstart', e => {
-  const card = e.target.closest('.category-card');
-  if (!card) return;
-  draggedItem = card;
-  draggedItem.classList.add('dragging');
-  // Necessário para habilitar o DnD em alguns navegadores
-  if (e.dataTransfer) {
-    e.dataTransfer.setData('text/plain', '');
-    e.dataTransfer.effectAllowed = 'move';
+  function updateNumbers() {
+    document.querySelectorAll('.category-card').forEach((card, idx) => {
+      const num = card.querySelector('.position-num');
+      if (num) num.textContent = idx + 1;
+    });
   }
-});
 
-categoryList.addEventListener('dragend', () => {
-  if (!draggedItem) return;
-  draggedItem.classList.remove('dragging');
-  draggedItem = null;
+  categoryList.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.category-card');
+    if (!card) return;
+    draggedItem = card;
+    draggedItem.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.setData('text/plain', '');
+      e.dataTransfer.effectAllowed = 'move';
+    }
+  });
+
+  categoryList.addEventListener('dragend', () => {
+    if (!draggedItem) return;
+    draggedItem.classList.remove('dragging');
+    draggedItem = null;
+    updateNumbers();
+  });
+
+  categoryList.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const target = e.target.closest('.category-card');
+    if (!target || !draggedItem || target === draggedItem) return;
+
+    const rect = target.getBoundingClientRect();
+    const isRow = window.matchMedia('(min-width: 768px)').matches;
+    const shouldPlaceAfter = isRow
+      ? e.clientX > rect.left + rect.width / 2
+      : e.clientY > rect.top + rect.height / 2;
+
+    categoryList.insertBefore(draggedItem, shouldPlaceAfter ? target.nextSibling : target);
+    updateNumbers();
+  });
+
   updateNumbers();
-});
 
-// Reordenação mais robusta: usa centro do elemento alvo
-categoryList.addEventListener('dragover', e => {
-  e.preventDefault();
-  const target = e.target.closest('.category-card');
-  if (!target || !draggedItem || target === draggedItem) return;
-
-  const rect = target.getBoundingClientRect();
-  const isRow = window.matchMedia('(min-width: 768px)').matches;
-  const shouldPlaceAfter = isRow
-    ? e.clientX > rect.left + rect.width / 2
-    : e.clientY > rect.top + rect.height / 2;
-
-  categoryList.insertBefore(draggedItem, shouldPlaceAfter ? target.nextSibling : target);
-  updateNumbers();
-});
-
-updateNumbers();
-
-// Captura a ordem no submit
-document.getElementById('prioridadesForm')?.addEventListener('submit', function() {
-  const ids = Array.from(document.querySelectorAll('.category-card')).map(c => c.dataset.catid);
-  document.getElementById('orderInput').value = JSON.stringify(ids);
-});
+  const form = document.getElementById('prioridadesForm');
+  if (form) {
+    form.addEventListener('submit', function () {
+      const ids = Array.from(document.querySelectorAll('.category-card')).map(c => c.dataset.catid);
+      document.getElementById('orderInput').value = JSON.stringify(ids);
+    });
+  }
+})();
 <?php endif; ?>
 </script>
 <?php include __DIR__ . '/../includes/mobile_nav.php'; ?>

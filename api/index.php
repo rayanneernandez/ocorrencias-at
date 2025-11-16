@@ -34,7 +34,7 @@ if (isset($_SESSION['usuario_id']) && $_SESSION['usuario_id'] > 0) {
 
     switch ($perfil) {
         case 10: // Admin
-            redirect("usuarios.php");
+            redirect("admin_inicio.php");
             break;
         case 2: // Prefeito
             redirect("prefeito_inicio.php");

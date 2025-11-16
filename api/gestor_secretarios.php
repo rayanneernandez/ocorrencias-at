@@ -23,8 +23,10 @@ try {
         UNIQUE KEY uniq_nome (nome)
       )
     ");
-    // tenta adicionar a coluna config caso a tabela já exista sem ela
+    // Migrações tolerantes: garantir colunas em bancos legados
+    try { $pdo->exec("ALTER TABLE gestor_perfis ADD COLUMN nome VARCHAR(100) NULL"); } catch (Throwable $_) {}
     try { $pdo->exec("ALTER TABLE gestor_perfis ADD COLUMN config TEXT NULL"); } catch (Throwable $_) {}
+
     $pdo->exec("
       CREATE TABLE IF NOT EXISTS secretarios_perfis (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,6 +34,22 @@ try {
         perfil_id INT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uniq_secretario (secretario_id),
+        INDEX (perfil_id)
+      )
+    ");
+    try { $pdo->exec("ALTER TABLE secretarios_perfis ADD COLUMN secretario_id INT NULL"); } catch (Throwable $_) {}
+    try { $pdo->exec("ALTER TABLE secretarios_perfis ADD COLUMN perfil_id INT NULL"); } catch (Throwable $_) {}
+    try { $pdo->exec("ALTER TABLE secretarios_perfis ADD COLUMN config TEXT NULL"); } catch (Throwable $_) {}
+
+    $pdo->exec("
+      CREATE TABLE IF NOT EXISTS ocorrencias_atribuicoes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        ocorrencia_id INT NOT NULL,
+        secretario_id INT NOT NULL,
+        perfil_id INT NULL,
+        data_atribuicao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_pair (ocorrencia_id, secretario_id),
+        INDEX (secretario_id),
         INDEX (perfil_id)
       )
     ");
@@ -45,20 +63,48 @@ $pesquisasRecebidas = 0;
 $prioridadesRecebidas = 0;
 try { $prioridadesRecebidas = (int)$pdo->query("SELECT COUNT(*) FROM prioridades")->fetchColumn(); } catch (Throwable $_) {}
 
-// Listagem principal
-$secretarios = $pdo->query("
+// contabiliza pesquisas recebidas
+try {
+    if ($pdo->query("SHOW TABLES LIKE 'pesquisa'")->rowCount() > 0) {
+        $pesquisasRecebidas = (int)$pdo->query("SELECT COUNT(*) FROM pesquisa")->fetchColumn();
+    }
+} catch (Throwable $_) { $pesquisasRecebidas = 0; }
+
+// Listagem principal (dinâmica conforme estrutura de secretarios_perfis e gestor_perfis)
+$hasSecretarioId = false;
+$hasPerfilId     = false;
+$hasGpNome       = false;
+$hasGpConfig     = false;
+try { $hasSecretarioId = $pdo->query("SHOW COLUMNS FROM secretarios_perfis LIKE 'secretario_id'")->rowCount() > 0; } catch (Throwable $_) {}
+try { $hasPerfilId     = $pdo->query("SHOW COLUMNS FROM secretarios_perfis LIKE 'perfil_id'")->rowCount() > 0; } catch (Throwable $_) {}
+try { $hasGpNome       = $pdo->query("SHOW COLUMNS FROM gestor_perfis LIKE 'nome'")->rowCount() > 0; } catch (Throwable $_) {}
+try { $hasGpConfig     = $pdo->query("SHOW COLUMNS FROM gestor_perfis LIKE 'config'")->rowCount() > 0; } catch (Throwable $_) {}
+if (!$hasSecretarioId) { $hasPerfilId = false; } // não referenciar sp.* sem chave
+
+$joinSp           = $hasSecretarioId ? 'LEFT JOIN secretarios_perfis sp ON sp.secretario_id = u.id' : '';
+$perfilExpr       = $hasPerfilId ? 'sp.perfil_id' : 'NULL';
+$joinPerfil       = ($hasPerfilId && $hasGpNome) ? 'LEFT JOIN gestor_perfis gp ON gp.id = sp.perfil_id' : '';
+$selectPerfilNome = ($hasPerfilId && $hasGpNome) ? "COALESCE(gp.nome, '') AS perfil_nome" : "'' AS perfil_nome";
+
+$sql = "
   SELECT u.id, u.nome, u.email,
-         sp.perfil_id AS perfil_id,
-         COALESCE(gp.nome, '') AS perfil_nome
+         {$perfilExpr} AS perfil_id,
+         {$selectPerfilNome}
     FROM usuarios u
-    LEFT JOIN secretarios_perfis sp ON sp.secretario_id = u.id
-    LEFT JOIN gestor_perfis gp ON gp.id = sp.perfil_id
+    {$joinSp}
+    {$joinPerfil}
    WHERE u.perfil = 3
    ORDER BY u.id DESC
-")->fetchAll(PDO::FETCH_ASSOC);
+";
+$secretarios = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
-// Perfis disponíveis
-$perfis = $pdo->query("SELECT id, nome, COALESCE(config, '') AS config FROM gestor_perfis ORDER BY nome ASC")->fetchAll(PDO::FETCH_ASSOC);
+// Perfis disponíveis (tolerante: se não houver 'nome'/'config', devolve vazio)
+$perfisSql = "SELECT id"
+           . ($hasGpNome   ? ", nome"                          : ", '' AS nome")
+           . ($hasGpConfig ? ", COALESCE(config, '') AS config" : ", '' AS config")
+           . " FROM gestor_perfis"
+           . " ORDER BY " . ($hasGpNome ? "nome" : "id") . " ASC";
+$perfis = $pdo->query($perfisSql)->fetchAll(PDO::FETCH_ASSOC);
 
 // Estados de UI
 $openModal = $openModal ?? '';
@@ -115,8 +161,139 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flash = 'ID de perfil inválido.';
         }
         $openModal = 'perfis';
+    } elseif ($action === 'create_secretario') {
+        $nome  = trim($_POST['nome'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $senha = $_POST['senha'] ?? '';
+        $conf  = $_POST['confirmar'] ?? '';
+        $assignPerfilId = (int)($_POST['assign_perfil_id'] ?? 0);
+
+        if ($nome === '' || $email === '' || $senha === '' || $conf === '') {
+            $flash = 'Preencha todos os campos do secretário.';
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $flash = 'E-mail inválido.';
+        } elseif ($senha !== $conf) {
+            $flash = 'As senhas não coincidem.';
+        } else {
+            try {
+                $exists = (int)$pdo->query("SELECT COUNT(*) FROM usuarios WHERE email = " . $pdo->quote($email))->fetchColumn() > 0;
+                if ($exists) {
+                    $flash = 'E-mail já cadastrado.';
+                } else {
+                    $hash = password_hash($senha, PASSWORD_DEFAULT);
+                    $stmt = $pdo->prepare("INSERT INTO usuarios (nome, email, senha, perfil) VALUES (?, ?, ?, 3)");
+                    $stmt->execute([$nome, $email, $hash]);
+                    $secId = (int)$pdo->lastInsertId();
+
+                    // Se perfil selecionado, atribui
+                    if ($assignPerfilId > 0) {
+                        try {
+                            $pdo->prepare("
+                                INSERT INTO secretarios_perfis (secretario_id, perfil_id)
+                                VALUES (?, ?)
+                                ON DUPLICATE KEY UPDATE perfil_id = VALUES(perfil_id)
+                            ")->execute([$secId, $assignPerfilId]);
+                        } catch (Throwable $_) {}
+                    }
+
+                    $flash = 'Secretário criado com sucesso.';
+                }
+            } catch (Throwable $e) {
+                $flash = 'Erro ao criar secretário: ' . $e->getMessage();
+            }
+        }
+    } elseif ($action === 'update_secretario') {
+        $id    = (int)($_POST['id'] ?? 0);
+        $nome  = trim($_POST['nome'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $senha = $_POST['senha'] ?? '';
+        $conf  = $_POST['confirmar'] ?? '';
+
+        if ($id <= 0) {
+            $flash = 'ID de secretário inválido.';
+        } elseif ($nome === '' || $email === '') {
+            $flash = 'Informe nome e e-mail.';
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $flash = 'E-mail inválido.';
+        } else {
+            try {
+                $exists = (int)$pdo->query("SELECT COUNT(*) FROM usuarios WHERE email = " . $pdo->quote($email) . " AND id <> {$id}")->fetchColumn() > 0;
+                if ($exists) {
+                    $flash = 'E-mail já cadastrado para outro usuário.';
+                } else {
+                    $hasSec = (int)$pdo->query("SELECT COUNT(*) FROM usuarios WHERE id = {$id} AND perfil = 3")->fetchColumn() > 0;
+                    if (!$hasSec) {
+                        $flash = 'Secretário não encontrado.';
+                    } else {
+                        if ($senha !== '') {
+                            if ($senha !== $conf) {
+                                $flash = 'As senhas não coincidem.';
+                            } else {
+                                $hash = password_hash($senha, PASSWORD_DEFAULT);
+                                $stmt = $pdo->prepare("UPDATE usuarios SET nome = ?, email = ?, senha = ? WHERE id = ?");
+                                $stmt->execute([$nome, $email, $hash, $id]);
+                                $flash = 'Secretário atualizado com sucesso.';
+                            }
+                        } else {
+                            $stmt = $pdo->prepare("UPDATE usuarios SET nome = ?, email = ? WHERE id = ?");
+                            $stmt->execute([$nome, $email, $id]);
+                            $flash = 'Secretário atualizado com sucesso.';
+                        }
+                    }
+                }
+            } catch (Throwable $e) {
+                $flash = 'Erro ao atualizar secretário: ' . $e->getMessage();
+            }
+        }
+    } elseif ($action === 'delete_secretario') {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id <= 0) {
+            $flash = 'ID de secretário inválido.';
+        } else {
+            try {
+                $pdo->beginTransaction();
+                // Remove vínculos do secretário
+                $pdo->prepare("DELETE FROM secretarios_perfis WHERE secretario_id = ?")->execute([$id]);
+                // Remove usuário (somente secretários)
+                $pdo->prepare("DELETE FROM usuarios WHERE id = ? AND perfil = 3")->execute([$id]);
+                $pdo->commit();
+                $flash = 'Secretário excluído com sucesso.';
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                $flash = 'Erro ao excluir secretário: ' . $e->getMessage();
+            }
+        }
+    } elseif ($action === 'assign_secretario') {
+        $perfilId     = (int)($_POST['perfil_id'] ?? 0);
+        $secretarioId = (int)($_POST['secretario_id'] ?? 0);
+
+        if ($perfilId <= 0 || $secretarioId <= 0) {
+            $flash = 'Selecione um secretário e um perfil válidos.';
+        } else {
+            try {
+                // Confere existência rápida
+                $hasSec = (int)$pdo->query("SELECT COUNT(*) FROM usuarios WHERE id = {$secretarioId} AND perfil = 3")->fetchColumn() > 0;
+                $hasPerf = (int)$pdo->query("SELECT COUNT(*) FROM gestor_perfis WHERE id = {$perfilId}")->fetchColumn() > 0;
+
+                if (!$hasSec || !$hasPerf) {
+                    $flash = 'Perfil ou Secretário inexistente.';
+                } else {
+                    $pdo->prepare("
+                        INSERT INTO secretarios_perfis (secretario_id, perfil_id)
+                        VALUES (?, ?)
+                        ON DUPLICATE KEY UPDATE perfil_id = VALUES(perfil_id)
+                    ")->execute([$secretarioId, $perfilId]);
+
+                    $flash = 'Secretário atribuído ao perfil com sucesso.';
+                }
+            } catch (Throwable $e) {
+                $flash = 'Erro ao atribuir secretário: ' . $e->getMessage();
+            }
+        }
     }
 }
+// Recarrega a listagem após alterações, para refletir perfil_nome
+$secretarios = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -128,24 +305,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body class="bg-white min-h-screen">
   <header class="bg-green-700 text-white">
-    <div class="container mx-auto px-6 py-4 flex items-center justify-between">
-      <h1 class="text-xl font-bold">RADCI</h1>
-      <nav class="space-x-6">
+    <div class="container mx-auto px-6 py-4 flex items-center justify-between relative">
+      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-8 w-auto" />
+      <nav class="hidden md:flex items-center gap-6">
         <a href="prefeito_inicio.php" class="hover:underline">Início</a>
         <a href="gestor_secretarios.php" class="hover:underline font-semibold">Meus Secretários</a>
         <a href="ocorrencias.php" class="hover:underline">Ocorrências</a>
-        <a href="relatorios.php" class="hover:underline">Relatório</a>
+        <a href="relatorios_prefeito.php" class="hover:underline">Relatórios</a>
+        <a href="criar_pesquisa.php" class="hover:underline">Criar Pesquisa</a>
+        <a href="pesquisa_respostas_prefeito.php" class="hover:underline">Respostas</a>
         <a href="login_cadastro.php?logout=1" class="hover:underline">Sair</a>
       </nav>
+      <button type="button" id="mobileMenuBtn" class="md:hidden inline-flex items-center gap-2 px-3 py-2 rounded-md bg-green-600 hover:bg-green-700">
+        <span class="sr-only">Abrir menu</span>
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h14M3 10h14M3 14h14"/></svg>
+      </button>
+      <div id="mobileMenu" class="absolute right-6 top-14 md:hidden hidden bg-white text-gray-800 rounded-lg shadow-lg border w-56">
+        <a href="prefeito_inicio.php" class="block px-4 py-2 hover:bg-gray-100">Início</a>
+        <a href="gestor_secretarios.php" class="block px-4 py-2 hover:bg-gray-100">Meus Secretários</a>
+        <a href="ocorrencias.php" class="block px-4 py-2 hover:bg-gray-100">Ocorrências</a>
+        <a href="relatorios_prefeito.php" class="block px-4 py-2 hover:bg-gray-100">Relatórios</a>
+        <a href="criar_pesquisa.php" class="block px-4 py-2 hover:bg-gray-100">Criar Pesquisa</a>
+        <a href="pesquisa_respostas_prefeito.php" class="block px-4 py-2 hover:bg-gray-100">Respostas</a>
+        <a href="login_cadastro.php?logout=1" class="block px-4 py-2 hover:bg-gray-100">Sair</a>
+      </div>
     </div>
   </header>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const btn = document.getElementById('mobileMenuBtn');
+      const menu = document.getElementById('mobileMenu');
+      if (btn && menu) {
+        btn.addEventListener('click', () => menu.classList.toggle('hidden'));
+        document.addEventListener('click', (e) => {
+          if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.add('hidden');
+        });
+      }
+    });
+  </script>
 
   <main class="container mx-auto px-6 py-8 max-w-6xl">
-    <?php if (!empty($flash)): ?>
-    <div class="mb-4 bg-green-100 border border-green-300 text-green-800 px-4 py-3 rounded">
-      <?= htmlspecialchars($flash) ?>
-    </div>
-    <?php endif; ?>
+
 
     <!-- KPIs -->
     <div class="grid md:grid-cols-3 gap-6 mb-8">
@@ -158,21 +358,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <p class="text-3xl font-semibold text-gray-900"><?= number_format($pesquisasRecebidas) ?></p>
       </div>
       <div class="bg-gray-50 rounded-xl border p-6">
-        <p class="text-sm text-gray-600">Prioridades recebidas</p>
+        <p class="text-sm text-gray-600">Ocorências recebidas</p>
         <p class="text-3xl font-semibold text-gray-900"><?= number_format($prioridadesRecebidas) ?></p>
       </div>
     </div>
 
     <div class="flex gap-3 mb-6">
-      <button id="btnSecretarios" class="px-4 py-2 rounded-md bg-green-700 text-white">Gerenciar Secretários</button>
-      <button id="btnPerfis" class="px-4 py-2 rounded-md bg-blue-600 text-white">Gerenciar Perfis</button>
+      <button class="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700" onclick="openCadastrarSecretario()">Cadastrar Secretário</button>
+      <button class="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700" onclick="openModal('modalPerfis')">Gerenciar Perfis</button>
     </div>
 
     <div class="bg-white rounded-xl shadow border">
       <table class="min-w-full text-left">
         <thead class="bg-gray-50 text-gray-700">
           <tr>
-            <th class="px-4 py-3 w-12">#</th>
+            <th class="px-4 py-3 w-12">I</th>
             <th class="px-4 py-3">Usuário</th>
             <th class="px-4 py-3">E-mail</th>
             <th class="px-4 py-3">Perfil</th>
@@ -180,28 +380,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           </tr>
         </thead>
         <tbody class="text-gray-800">
-          <?php foreach ($secretarios as $idx => $s): ?>
-            <tr class="<?= $idx % 2 === 0 ? 'bg-white' : 'bg-gray-50' ?>">
-              <td class="px-4 py-3"><?= (int)$s['id'] ?></td>
-              <td class="px-4 py-3 font-medium"><?= htmlspecialchars($s['nome']) ?></td>
-              <td class="px-4 py-3"><?= htmlspecialchars($s['email']) ?></td>
-              <td class="px-4 py-3"><?= htmlspecialchars($s['perfil_nome'] ?: '-') ?></td>
-              <td class="px-4 py-3 text-right relative" data-actions="1">
-                <button
-                  class="px-3 py-2 rounded-full bg-gray-100 hover:bg-gray-200"
-                  onclick="toggleMenu(<?= (int)$s['id'] ?>)">
-                  ▼
-                </button>
-                <div id="menu-<?= (int)$s['id'] ?>" class="absolute right-0 mt-2 w-36 bg-white border rounded-md shadow-lg hidden z-20">
-                  <button
-                    class="block w-full text-left px-4 py-2 hover:bg-gray-100"
-                    onclick="openAssign(<?= (int)$s['id'] ?>, '<?= htmlspecialchars($s['nome'], ENT_QUOTES) ?>', <?= (int)($s['perfil_id'] ?? 0) ?>); toggleMenu(<?= (int)$s['id'] ?>);">
-                    Alterar Perfil
-                  </button>
-                </div>
-              </td>
-            </tr>
-          <?php endforeach; ?>
+<?php foreach ($secretarios as $s): ?>
+<tr class="border-t">
+    <td class="px-4 py-2"><?= (int)$s['id'] ?></td>
+    <td class="px-4 py-2"><?= htmlspecialchars($s['nome'] ?? '') ?></td>
+    <td class="px-4 py-2"><?= htmlspecialchars($s['email'] ?? '') ?></td>
+    <td class="px-4 py-2"><?= htmlspecialchars($s['perfil_nome'] ?? '-') ?></td>
+
+    <!-- Ações por usuário -->
+    <td class="px-4 py-2 text-right relative">
+        <button type="button" class="px-2 py-1 rounded-md border hover:bg-gray-50" onclick="toggleMenu(this)">▼</button>
+        <div class="hidden absolute right-0 mt-2 w-56 bg-white border rounded-md shadow-lg z-10">
+            <button type="button" class="block w-full text-left px-4 py-2 hover:bg-gray-100"
+                    onclick="openAtribuirPerfil(<?= (int)$s['id'] ?>)">Atribuir a Perfil…</button>
+
+            <button type="button" class="block w-full text-left px-4 py-2 hover:bg-gray-100"
+                    onclick="openEditarSecretario(<?= (int)$s['id'] ?>,'<?= htmlspecialchars($s['nome'] ?? '', ENT_QUOTES) ?>','<?= htmlspecialchars($s['email'] ?? '', ENT_QUOTES) ?>')">Editar Usuário…</button>
+
+            <form method="POST" class="block">
+                <input type="hidden" name="action" value="delete_secretario" />
+                <input type="hidden" name="id" value="<?= (int)$s['id'] ?>" />
+                <button class="block w-full text-left px-4 py-2 hover:bg-gray-100"
+                        onclick="return confirm('Excluir este secretário?')">Excluir Usuário</button>
+            </form>
+        </div>
+    </td>
+</tr>
+<?php endforeach; ?>
           <?php if (empty($secretarios)): ?>
             <tr><td colspan="5" class="px-4 py-6 text-center text-gray-500">Nenhum secretário encontrado.</td></tr>
           <?php endif; ?>
@@ -234,7 +439,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <div id="assignInline" class="hidden">
             <form id="assignForm" method="POST">
               <input type="hidden" name="action" value="assign_secretario" />
-              <input type="hidden" id="assignSecId" name="secretario_id" value="" />
+              <input type="hidden" id="assignInlineSecId" name="secretario_id" value="" />
 
               <div class="border rounded-lg overflow-hidden">
                 <table class="min-w-full text-left">
@@ -318,6 +523,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Abrir “Gerenciar Perfis”
     document.getElementById('btnPerfis')?.addEventListener('click', () => openModal('modalPerfis'));
+
+    // Abrir “Cadastrar Secretário”
+    function openCadastrarSecretario() {
+      openModal('modalCadastrarSecretario');
+    }
+
+    // Abrir “Editar Secretário” preenchendo o formulário
+    function openEditarSecretario(id, nome, email) {
+      const idEl   = document.getElementById('editSecId');
+      const nomeEl = document.getElementById('editSecNome');
+      const mailEl = document.getElementById('editSecEmail');
+      if (idEl)   idEl.value   = String(id || 0);
+      if (nomeEl) nomeEl.value = String(nome || '');
+      if (mailEl) mailEl.value = String(email || '');
+      openModal('modalEditarSecretario');
+    }
+
+    // Abrir “Atribuir a Perfil” preenchendo o secretário alvo
+    function openAtribuirPerfil(secretarioId) {
+      const idEl = document.getElementById('assignSecId');
+      if (idEl) idEl.value = String(secretarioId || 0);
+      openModal('modalAtribuirPerfil');
+    }
+
+    // Wrapper para referências antigas
+    function openAtribuirSecretario(secretarioId) {
+      openAtribuirPerfil(secretarioId);
+    }
     
     // Drop-down dos perfis
     function togglePerfilMenu(id) {
@@ -485,14 +718,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       initMultiSelect('ms-sugestoes',  prioridadeCategorias, 'Selecione categorias');
       initMultiSelect('ms-elogios',    prioridadeCategorias, 'Selecione categorias');
       initMultiSelect('ms-reclamacao', prioridadeCategorias, 'Selecione categorias');
-
+    
       // Estado RJ padrão
       fillSelectOptions('acessosEstado', estadosBR, { placeholder: 'Selecione o Estado' });
       const estadoSel = document.getElementById('acessosEstado');
       if (estadoSel) estadoSel.value = 'RJ';
-
+    
       // Municípios: todos do RJ
       fillSelectOptions('acessosMunicipio', municipiosRJ, { placeholder: 'Município' });
+    }
+
+    // NOVO: limpar todo o editor de perfil
+    function clearPerfilEditor(preserveId = false) {
+      const idInput   = document.getElementById('perfilEditId');
+      const nomeInput = document.getElementById('perfilEditNome');
+    
+      if (!preserveId && idInput) idInput.value = '';
+      if (nomeInput) nomeInput.value = '';
+    
+      // Zera multi-selects
+      setMSValues('ms-pesquisas',  []);
+      setMSValues('ms-sugestoes',  []);
+      setMSValues('ms-elogios',    []);
+      setMSValues('ms-reclamacao', []);
+    
+      // Reseta selects e texto
+      const estado = document.getElementById('acessosEstado');
+      const municipio = document.getElementById('acessosMunicipio');
+      const bairros = document.getElementById('acessosBairros');
+      if (estado) estado.value = 'RJ';
+      if (municipio) municipio.value = '';
+      if (bairros) bairros.value = '';
+    
+      // Zera config
+      const cfgHidden = document.getElementById('perfilEditConfig');
+      if (cfgHidden) cfgHidden.value = '{}';
     }
 
     // Editor de Perfil: abrir (novo/alterar) e preencher
@@ -500,36 +760,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       openModal('modalPerfilEditor');
       setupPerfilEditorOptions();
     
-      const idInput   = document.getElementById('perfilEditId');
-      const nomeInput = document.getElementById('perfilEditNome');
-    
-      // limpa
-      idInput.value = '';
-      nomeInput.value = '';
-      setMSValues('ms-pesquisas',  []);
-      setMSValues('ms-sugestoes',  []);
-      setMSValues('ms-elogios',    []);
-      setMSValues('ms-reclamacao', []);
-      document.getElementById('acessosEstado').value = 'RJ';
-      document.getElementById('acessosMunicipio').value = '';
-      document.getElementById('acessosBairros').value = '';
-      document.getElementById('perfilEditConfig').value = '{}';
+      // Limpa antes de popular
+      clearPerfilEditor(true);
     
       if (mode === 'edit' && id) {
         const perfil = perfisData.find(p => String(p.id) === String(id));
         if (perfil) {
-          idInput.value   = String(perfil.id);
-          nomeInput.value = perfil.nome || '';
-          let cfg = {};
-          try { cfg = perfil.config ? JSON.parse(perfil.config) : {}; } catch(_) { cfg = {}; }
+          document.getElementById('perfilEditId').value   = String(perfil.id);
+          document.getElementById('perfilEditNome').value = perfil.nome || '';
     
-          setMSValues('ms-pesquisas',  cfg.pesquisas);
-          setMSValues('ms-sugestoes',  cfg.sugestoes);
-          setMSValues('ms-elogios',    cfg.elogios);
-          setMSValues('ms-reclamacao', cfg.reclamacao);
-          document.getElementById('acessosEstado').value    = (cfg.estado || 'RJ');
+          // Corrigido: usar JSON.parse e normalizar arrays
+          let cfg = {};
+          try { cfg = perfil.config ? JSON.parse(perfil.config) : {}; } catch (_) { cfg = {}; }
+          const asArr = v => Array.isArray(v) ? v : [];
+    
+          setMSValues('ms-pesquisas',  asArr(cfg.pesquisas));
+          setMSValues('ms-sugestoes',  asArr(cfg.sugestoes));
+          setMSValues('ms-elogios',    asArr(cfg.elogios));
+          setMSValues('ms-reclamacao', asArr(cfg.reclamacao));
+    
+          document.getElementById('acessosEstado').value    = (cfg.estado    || 'RJ');
           document.getElementById('acessosMunicipio').value = (cfg.municipio || '');
-          document.getElementById('acessosBairros').value   = (cfg.bairros || '');
+          document.getElementById('acessosBairros').value   = (cfg.bairros   || '');
     
           document.getElementById('perfilEditConfig').value = JSON.stringify(cfg);
         }
@@ -553,11 +805,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // ações de bairros (placeholder visual)
     function addBairro() {
       const el = document.getElementById('acessosBairros');
-      el.value = el.value; // mantenha a digitação, pode evoluir para chips depois
+      el.value = el.value;
     }
     function limparBairros() {
-      const el = document.getElementById('acessosBairros');
-      el.value = '';
+      // AGORA: limpa tudo. Se estiver editando (id presente), preserva id.
+      const preserveId = !!document.getElementById('perfilEditId')?.value;
+      clearPerfilEditor(preserveId);
     }
     
     // Abre modal automaticamente após POST (sem warnings)
@@ -573,7 +826,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <!-- Modal: Gerenciar Perfis (lista + ações) -->
     <div id="modalPerfis" class="fixed inset-0 bg-black/50 hidden z-40 flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden">
+      <div class="bg-white rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between px-6 py-4 border-b">
           <h3 class="text-lg font-semibold">Gerenciar Perfis</h3>
           <button class="text-gray-500 hover:text-gray-700" onclick="closeModal('modalPerfis')">✕</button>
@@ -598,7 +851,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   <tr>
                     <td class="px-4 py-2"><?= htmlspecialchars($p['nome']) ?></td>
                     <td class="px-4 py-2 text-right relative" data-perfis="1">
-                      <button class="px-3 py-2 rounded-full bg-gray-100 hover:bg-gray-200" onclick="togglePerfilMenu(<?= (int)$p['id'] ?>)">▼</button>
+                      <button class="px-3 py-2 rounded-md bg-gray-100 hover:bg-gray-200" onclick="togglePerfilMenu(<?= (int)$p['id'] ?>)">▼</button>
                       <div id="p-menu-<?= (int)$p['id'] ?>" class="absolute right-0 mt-2 w-36 bg-white border rounded-md shadow-lg hidden z-30">
                         <button class="block w-full text-left px-4 py-2 hover:bg-gray-100"
                                 onclick="openPerfilEditor('edit', <?= (int)$p['id'] ?>); togglePerfilMenu(<?= (int)$p['id'] ?>);">Alterar</button>
@@ -623,7 +876,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <!-- Modal: Editor de Perfil (cabeçalho com título) -->
     <div id="modalPerfilEditor" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden">
+      <div class="bg-white rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
         <!-- Cabeçalho fixo com título -->
         <div class="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white z-10">
           <div class="flex items-center gap-3">
@@ -635,7 +888,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     
         <!-- Conteúdo com rolagem interna -->
-        <form id="perfilEditForm" method="POST" class="px-6 py-4 space-y-6 max-h-[70vh] overflow-y-auto">
+        <form id="perfilEditForm" method="POST" class="px-6 py-4 space-y-6 max-h-[80vh] overflow-y-auto">
           <input type="hidden" name="action" value="save_perfil" />
           <input type="hidden" id="perfilEditId" name="id" value="">
           <input type="hidden" id="perfilEditConfig" name="config" value="{}">
@@ -657,7 +910,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               </button>
               <div data-ms-list class="absolute mt-2 w-full bg-white border rounded-md shadow-lg hidden z-20 max-h-60 overflow-y-auto">
                 <div class="p-2">
-                  <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-2" />
+                  <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-3" />
                 </div>
               </div>
               <input type="hidden" data-ms-hidden id="driversPesquisas" value="[]">
@@ -673,7 +926,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   </button>
                   <div data-ms-list class="absolute mt-2 w-full bg-white border rounded-md shadow-lg hidden z-20 max-h-60 overflow-y-auto">
                     <div class="p-2">
-                      <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-2" />
+                      <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-3" />
                     </div>
                   </div>
                   <input type="hidden" data-ms-hidden id="driversSugestoes" value="[]">
@@ -688,7 +941,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   </button>
                   <div data-ms-list class="absolute mt-2 w-full bg-white border rounded-md shadow-lg hidden z-20 max-h-60 overflow-y-auto">
                     <div class="p-2">
-                      <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-2" />
+                      <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-3" />
                     </div>
                   </div>
                   <input type="hidden" data-ms-hidden id="driversElogios" value="[]">
@@ -696,7 +949,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               </div>
             </div>
     
-            <!-- Removido: campo "Outros" -->
             <!-- Reclamação em bloco único -->
             <div class="mt-4">
               <label class="block text-sm text-gray-700 mb-1">Reclamação</label>
@@ -707,7 +959,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </button>
                 <div data-ms-list class="absolute mt-2 w-full bg-white border rounded-md shadow-lg hidden z-20 max-h-60 overflow-y-auto">
                   <div class="p-2">
-                    <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-2" />
+                    <input type="text" data-ms-search placeholder="Buscar..." class="w-full border rounded-md p-3" />
                   </div>
                 </div>
                 <input type="hidden" data-ms-hidden id="driversReclamacao" value="[]">
@@ -755,3 +1007,122 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
       </div>
     </div>
+
+<script>
+function toggleMenu(btn) {
+  const menu = btn.nextElementSibling;
+  if (!menu) return;
+  menu.classList.toggle('hidden');
+}
+
+// Wrapper para compatibilidade com referências antigas
+function openAtribuirSecretario(secretarioId) {
+  openAtribuirPerfil(secretarioId);
+}
+</script>
+<!-- Modal: Cadastrar Secretário -->
+<div id="modalCadastrarSecretario" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b bg-white">
+      <h3 class="text-lg font-semibold text-gray-900">Cadastrar Secretário</h3>
+      <button class="px-3 py-1 rounded-md bg-gray-100 hover:bg-gray-200" onclick="closeModal('modalCadastrarSecretario')">×</button>
+    </div>
+    <form method="POST" class="p-6 space-y-3">
+      <input type="hidden" name="action" value="create_secretario" />
+      <div>
+        <label class="text-sm mb-1 block">Nome</label>
+        <input type="text" name="nome" class="w-full p-3 rounded-md border" required />
+      </div>
+      <div>
+        <label class="text-sm mb-1 block">E-mail</label>
+        <input type="email" name="email" class="w-full p-3 rounded-md border" required />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm mb-1 block">Senha</label>
+          <input type="password" name="senha" class="w-full p-3 rounded-md border" required />
+        </div>
+        <div>
+          <label class="text-sm mb-1 block">Confirmar</label>
+          <input type="password" name="confirmar" class="w-full p-3 rounded-md border" required />
+        </div>
+      </div>
+      <div>
+        <label class="text-sm mb-1 block">Atribuir ao Perfil (opcional)</label>
+        <select name="assign_perfil_id" class="w-full p-3 rounded-md border">
+          <option value="">Selecione</option>
+          <?php foreach ($perfis as $p): ?>
+            <option value="<?= (int)$p['id'] ?>"><?= htmlspecialchars($p['nome'] ?? '') ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="flex justify-end gap-3">
+        <button type="button" class="px-3 py-2 rounded-md bg-gray-100 hover:bg-gray-200" onclick="closeModal('modalCadastrarSecretario')">Cancelar</button>
+        <button type="submit" class="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">Criar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Editar Secretário -->
+<div id="modalEditarSecretario" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b bg-white">
+      <h3 class="text-lg font-semibold text-gray-900">Editar Secretário</h3>
+      <button class="px-3 py-1 rounded-md bg-gray-100 hover:bg-gray-200" onclick="closeModal('modalEditarSecretario')">×</button>
+    </div>
+    <form method="POST" class="p-6 space-y-3">
+      <input type="hidden" name="action" value="update_secretario" />
+      <input type="hidden" name="id" id="editSecId" value="0" />
+      <div>
+        <label class="text-sm mb-1 block">Nome</label>
+        <input type="text" name="nome" id="editSecNome" class="w-full p-3 rounded-md border" required />
+      </div>
+      <div>
+        <label class="text-sm mb-1 block">E-mail</label>
+        <input type="email" name="email" id="editSecEmail" class="w-full p-3 rounded-md border" required />
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-sm mb-1 block">Nova Senha (opcional)</label>
+          <input type="password" name="senha" class="w-full p-3 rounded-md border" />
+        </div>
+        <div>
+          <label class="text-sm mb-1 block">Confirmar</label>
+          <input type="password" name="confirmar" class="w-full p-3 rounded-md border" />
+        </div>
+      </div>
+      <div class="flex justify-end gap-3">
+        <button type="button" class="px-3 py-2 rounded-md bg-gray-100 hover:bg-gray-200" onclick="closeModal('modalEditarSecretario')">Cancelar</button>
+        <button type="submit" class="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Atribuir a Perfil -->
+<div id="modalAtribuirPerfil" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b bg-white">
+      <h3 class="text-lg font-semibold text-gray-900">Atribuir a Perfil</h3>
+      <button class="px-3 py-1 rounded-md bg-gray-100 hover:bg-gray-200" onclick="closeModal('modalAtribuirPerfil')">×</button>
+    </div>
+    <form method="POST" class="p-6 space-y-3">
+      <input type="hidden" name="action" value="assign_secretario" />
+      <input type="hidden" name="secretario_id" id="assignSecId" value="0" />
+      <div>
+        <label class="text-sm mb-1 block">Perfil</label>
+        <select name="perfil_id" class="w-full p-3 rounded-md border" required>
+          <option value="">Selecione</option>
+          <?php foreach ($perfis as $p): ?>
+            <option value="<?= (int)$p['id'] ?>"><?= htmlspecialchars($p['nome'] ?? '') ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="flex justify-end gap-3">
+        <button type="button" class="px-3 py-2 rounded-md bg-gray-100 hover:bg-gray-200" onclick="closeModal('modalAtribuirPerfil')">Cancelar</button>
+        <button type="submit" class="px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">Atribuir</button>
+      </div>
+    </form>
+  </div>
+</div>

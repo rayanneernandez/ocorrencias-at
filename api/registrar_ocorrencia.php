@@ -47,7 +47,8 @@ if(!isset($_SESSION['report'])) {
         'step' => 1,
         'address' => '',
         'cep' => '',
-        'type' => $selectedCategory, // Pré-seleciona a categoria clicada
+        'type' => $selectedCategory, // Pré-seleciona a categoria clicada (slug do driver)
+        'manifestacao' => '',        // Tipo de manifestação: Sugestão de Melhoria | Reclamação | Elogio
         'description' => '',
         'coordinates' => [-22.9068, -43.1729],
         'files' => []
@@ -96,6 +97,10 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['report']['type'] = $_POST['type'];
                 $_SESSION['report']['address'] = $_POST['address'] ?? '';
                 $_SESSION['report']['cep'] = $_POST['cep'] ?? '';
+                $_SESSION['report']['bairro'] = $_POST['bairro'] ?? '';
+                $_SESSION['report']['complemento'] = $_POST['complemento'] ?? '';
+                $_SESSION['report']['cidade'] = $_POST['cidade'] ?? '';
+                $_SESSION['report']['uf'] = $_POST['uf'] ?? '';
                 if (isset($_POST['coordinates'])) {
                     $_SESSION['report']['coordinates'] = explode(',', $_POST['coordinates']);
                 }
@@ -109,7 +114,8 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
             error_log("POST data: " . print_r($_POST, true));
             error_log("FILES data: " . print_r($_FILES, true));
             
-            if (empty($_POST['type'])) {
+            // Tipo de manifestação agora é 'manifestacao'
+            if (empty($_POST['manifestacao'])) {
                 $errors[] = 'Tipo de manifestação é obrigatório';
             }
             
@@ -136,7 +142,8 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['flash_error'] = implode(', ', $errors);
                 error_log("Validation errors: " . implode(', ', $errors));
             } else {
-                $_SESSION['report']['type'] = $_POST['type'] ?? '';
+                // Não sobrescrever a categoria 'type' (slug do driver)
+                $_SESSION['report']['manifestacao'] = $_POST['manifestacao'] ?? '';
                 $_SESSION['report']['description'] = $_POST['description'] ?? '';
                 
                 // Salva arquivos em pasta temporária pública para pré-visualização
@@ -193,9 +200,32 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $endereco = $report['address'] ?? '';
                 $cep = $report['cep'] ?? '';
-                $tipo = $report['type'] ?? '';
+                $tipo = $report['type'] ?? ''; // slug do driver (ex.: planejamento)
+                $manifestacao = $report['manifestacao'] ?? ''; // ex.: 'Sugestão de Melhoria'
                 $descricao = $report['description'] ?? '';
                 $coords = $report['coordinates'] ?? [0, 0];
+                // Normaliza tipo (slug) para o nome oficial do driver
+                $tipoSlug = strtolower(trim($tipo));
+                $tipoMap = [
+                    'saude' => 'Saúde',
+                    'inovacao' => 'Inovação',
+                    'mobilidade' => 'Mobilidade',
+                    'politicas' => 'Políticas Públicas',
+                    'riscos' => 'Riscos Urbanos',
+                    'sustentabilidade' => 'Sustentabilidade',
+                    'planejamento' => 'Planejamento Urbano',
+                    'educacao' => 'Educação',
+                    'meio' => 'Meio Ambiente',
+                    'infraestrutura' => 'Infraestrutura da Cidade',
+                    'seguranca' => 'Segurança Pública',
+                    'energias' => 'Energias Inteligentes',
+                ];
+                $tipo = $tipoMap[$tipoSlug] ?? $tipo;
+                // Adiciona dados de localização coletados no Passo 1
+                $cidadeOcorrencia = trim($report['cidade'] ?? '');
+                $bairroOcorrencia = trim($report['bairro'] ?? '');
+                $ufOcorrencia     = strtoupper(trim($report['uf'] ?? ''));
+
                 $latitude = is_array($coords) && count($coords) >= 2 ? floatval($coords[0]) : 0;
                 $longitude = is_array($coords) && count($coords) >= 2 ? floatval($coords[1]) : 0;
                 
@@ -231,14 +261,16 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // Processa arquivos
                 $arquivosFinal = [];
-                $temImagens = 'Não';
+                $temImagens = 0; // 0 = não, 1 = sim
+                $temVideos = 0; // 0 = não, 1 = sim
                 $previewFiles = $report['preview_files'] ?? [];
                 
                 error_log("Preview files: " . print_r($previewFiles, true));
                 
-                if (empty($previewFiles)) {
-                    throw new Exception('Nenhum arquivo foi enviado');
-                }
+                // Permite seguir sem anexos
+                // if (empty($previewFiles)) {
+                //     throw new Exception('Nenhum arquivo foi enviado');
+                // }
                 
                 foreach ($previewFiles as $file) {
                     if (empty($file['url'])) {
@@ -246,8 +278,8 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                         continue;
                     }
                     
-                    // Ajusta o caminho do arquivo temporário
-                    $tempPath = __DIR__ . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $file['url']);
+                    // Ajusta o caminho do arquivo temporário (fora de /api)
+                    $tempPath = __DIR__ . '/../' . str_replace('/', DIRECTORY_SEPARATOR, $file['url']);
                     error_log("Processando arquivo: " . $file['name'] . " (temp: $tempPath)");
                     
                     if (!file_exists($tempPath)) {
@@ -306,17 +338,20 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'url' => 'uploads/' . $finalName
                     ];
                     
-                    // Verifica se é imagem
+                    // Verifica se é imagem ou vídeo
                     if (preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $file['name'])) {
-                        $temImagens = 'Sim';
+                        $temImagens = 1;
+                    } elseif (strpos(strtolower($file['type'] ?? ''), 'video') !== false || preg_match('/\.(mp4|mov|avi|mkv|webm)$/i', $file['name'])) {
+                        $temVideos = 1;
                     }
                     
                     error_log("Arquivo processado com sucesso: " . $finalName);
                 }
                 
-                if (empty($arquivosFinal)) {
-                    throw new Exception('Nenhum arquivo foi processado com sucesso. Verifique se os arquivos foram enviados corretamente.');
-                }
+                // Não bloqueia se nenhum arquivo foi processado
+                // if (empty($arquivosFinal)) {
+                //     throw new Exception('Nenhum arquivo foi processado com sucesso. Verifique se os arquivos foram enviados corretamente.');
+                // }
                 
                 error_log("Arquivos processados com sucesso: " . print_r($arquivosFinal, true));
                 
@@ -344,9 +379,10 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                         longitude, 
                         arquivos, 
                         tem_imagens, 
+                        tem_videos,
                         status,
                         data_criacao
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Em Análise', NOW())";
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'em_analise', NOW())";
                     
                     $stmt = $pdo->prepare($insertSQL);
                     $result = $stmt->execute([
@@ -359,7 +395,8 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $latitude,
                         $longitude,
                         json_encode($arquivosFinal),
-                        $temImagens
+                        $temImagens,
+                        $temVideos
                     ]);
                     
                     if (!$result) {
@@ -380,6 +417,100 @@ if($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (!$resultPrioridades) {
                         throw new Exception("Erro ao registrar prioridade: " . implode(" ", $stmtPrioridades->errorInfo()));
                     }
+                    
+                    // Auto-atribuição: encontra secretário pelo perfil que cobre a categoria da ocorrência NO TÓPICO selecionado
+                    try {
+                        // Busca perfis e secretários com config
+                        $stmtMap = $pdo->query(
+                            "
+                            SELECT sp.secretario_id, sp.perfil_id, COALESCE(gp.config, '') AS cfg
+                              FROM secretarios_perfis sp
+                              LEFT JOIN gestor_perfis gp ON gp.id = sp.perfil_id
+                            "
+                        );
+                        $mapRows = $stmtMap->fetchAll(PDO::FETCH_ASSOC);
+                        $recommendedSecId = 0;
+                        $recommendedPerfId = null;
+                        
+                        // Determina a chave do tópico (sugestoes/reclamacao/elogios/pesquisas) com base na manifestação
+                        $m = strtolower(trim($manifestacao));
+                        $selKey = ($m === 'sugestão de melhoria') ? 'sugestoes'
+                                 : ($m === 'reclamação' ? 'reclamacao'
+                                 : ($m === 'elogio' ? 'elogios' : ''));
+
+                        foreach ($mapRows as $mr) {
+                            $cfg = [];
+                            try { $cfg = $mr['cfg'] ? json_decode($mr['cfg'], true) : []; } catch (Throwable $_) { $cfg = []; }
+                            if (!is_array($cfg)) $cfg = [];
+
+                            // Se há tópico definido, usa somente as categorias daquele tópico
+                            $cats = [];
+                            if ($selKey && isset($cfg[$selKey]) && is_array($cfg[$selKey])) {
+                                $cats = array_map(fn($v) => strtolower(trim((string)$v)), $cfg[$selKey]);
+                            }
+
+                            // valida escopo geográfico do perfil (estado/município/bairros), se definidos
+                            $cfgEstado    = strtoupper(trim((string)($cfg['estado'] ?? '')));
+                            $cfgMunicipio = strtolower(trim((string)($cfg['municipio'] ?? '')));
+                            $cfgBairros   = array_filter(array_map(
+                                fn($v) => strtolower(trim($v)),
+                                explode(',', (string)($cfg['bairros'] ?? ''))
+                            ));
+
+                            $estadoOk    = ($cfgEstado === '' || $ufOcorrencia === '' || $cfgEstado === $ufOcorrencia);
+                            $municipioOk = ($cfgMunicipio === '' || $cidadeOcorrencia === '' || strtolower(trim($cidadeOcorrencia)) === $cfgMunicipio);
+                            $bairroOk    = (empty($cfgBairros) || $bairroOcorrencia === '' || in_array(strtolower($bairroOcorrencia), $cfgBairros, true));
+
+                            // categoria precisa bater pelo slug (ex.: 'planejamento', 'saude', etc.) dentro do tópico selecionado
+                            $categoriaOk = ($selKey !== '' && in_array($tipoSlug, $cats, true));
+
+                            if ($estadoOk && $municipioOk && $bairroOk && $categoriaOk) {
+                                $recommendedSecId = (int)$mr['secretario_id'];
+                                $recommendedPerfId = (int)($mr['perfil_id'] ?? 0);
+                                break;
+                            }
+                        }
+                        
+                        if ($recommendedSecId > 0) {
+                            // Detecta estrutura de atribuição
+                            $hasSecIdCol    = $pdo->query("SHOW COLUMNS FROM ocorrencias LIKE 'secretario_id'")->rowCount() > 0;
+                            $hasAssignedCol = !$hasSecIdCol && $pdo->query("SHOW COLUMNS FROM ocorrencias LIKE 'assigned_secretario_id'")->rowCount() > 0;
+                            
+                            if ($hasSecIdCol) {
+                                $pdo->prepare("UPDATE ocorrencias SET secretario_id = ?, status = 'encaminhada' WHERE id = ? LIMIT 1")
+                                    ->execute([$recommendedSecId, $ocorrenciaId]);
+                            } elseif ($hasAssignedCol) {
+                                $pdo->prepare("UPDATE ocorrencias SET assigned_secretario_id = ?, status = 'encaminhada' WHERE id = ? LIMIT 1")
+                                    ->execute([$recommendedSecId, $ocorrenciaId]);
+                            } else {
+                                // Somente se não houver colunas de responsável direto, usa a tabela de mapeamento
+                                $pdo->exec(
+                                    "
+                                  CREATE TABLE IF NOT EXISTS ocorrencias_atribuicoes (
+                                    id INT AUTO_INCREMENT PRIMARY KEY,
+                                    ocorrencia_id INT NOT NULL,
+                                    secretario_id INT NOT NULL,
+                                    perfil_id INT NULL,
+                                    data_atribuicao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                    UNIQUE KEY uniq_pair (ocorrencia_id, secretario_id),
+                                    INDEX (secretario_id), INDEX (perfil_id)
+                                  )
+                                    "
+                                );
+                                $stmtIns = $pdo->prepare(
+                                    "
+                                  INSERT INTO ocorrencias_atribuicoes (ocorrencia_id, secretario_id, perfil_id)
+                                  VALUES (?, ?, ?)
+                                  ON DUPLICATE KEY UPDATE perfil_id = VALUES(perfil_id), data_atribuicao = CURRENT_TIMESTAMP
+                                    "
+                                );
+                                $stmtIns->execute([$ocorrenciaId, $recommendedSecId, $recommendedPerfId ?: null]);
+                                // Atualiza apenas o status da ocorrência
+                                $pdo->prepare("UPDATE ocorrencias SET status = 'encaminhada' WHERE id = ? LIMIT 1")
+                                    ->execute([$ocorrenciaId]);
+                            }
+                        }
+                    } catch (Throwable $_) {}
                     
                     // Confirma transação
                     $pdo->commit();
@@ -450,6 +581,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const coordsEl = document.getElementById('coordinates');
     const cepEl = document.getElementById('cep');
     const addressEl = document.getElementById('address');
+    const numberEl = document.getElementById('number');
+    const bairroEl = document.getElementById('bairro');
+    const complementoEl = document.getElementById('complemento');
+    const cidadeEl = document.getElementById('cidade');
+    const ufEl = document.getElementById('uf');
+    const toggleBtn = document.getElementById('toggleDetails');
+    const detailsDiv = document.getElementById('addressDetails');
+
+    toggleBtn?.addEventListener('click', () => {
+      detailsDiv?.classList.toggle('hidden');
+    });
 
     const DEFAULT = [-22.9068, -43.1729];
     let map, marker;
@@ -458,6 +600,41 @@ document.addEventListener('DOMContentLoaded', () => {
     let refineWatchId = null;
     let lastCepFetchedDigits = '';   // evita requisição repetida
     let lastAddressQuery = '';      // evita requisição repetida de endereço
+
+    // Adiciona debounce local para eventos de digitação
+    function debounce(fn, wait) {
+        let t;
+        return (...args) => {
+            clearTimeout(t);
+            t = setTimeout(() => fn(...args), wait);
+        };
+    }
+
+    // Liga eventos: CEP → move marcador, preenche e normaliza
+    if (cepEl) {
+        const onCepInput = debounce(() => fromCepInput(cepEl.value), 300);
+        cepEl.addEventListener('input', onCepInput);
+        cepEl.addEventListener('blur', () => fromCepInput(cepEl.value));
+        cepEl.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                fromCepInput(cepEl.value);
+            }
+        });
+    }
+
+    // Liga eventos: Endereço → geocodifica e move marcador
+    if (addressEl) {
+        const onAddressInput = debounce(() => fromAddressInput(addressEl.value), 500);
+        addressEl.addEventListener('input', onAddressInput);
+        addressEl.addEventListener('blur', () => fromAddressInput(addressEl.value));
+        addressEl.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                fromAddressInput(addressEl.value);
+            }
+        });
+    }
 
   // Função para atualizar o mapa com novo endereço
   async function updateMapFromAddress(address) {
@@ -477,34 +654,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return false;
   }
 
-  // Monitora mudanças no CEP
-  cepEl?.addEventListener('input', async function() {
-    const cep = this.value.replace(/\D/g, '');
-    if (cep.length === 8) {
-      try {
-        const viacepUrl = `/radci/api/viacep.php?cep=${cep}`;
-        const response = await fetch(viacepUrl);
-        const data = await response.json();
-        
-        if (!data.erro) {
-          const fullAddress = `${data.logradouro}, ${data.bairro}, ${data.localidade} - ${data.uf}`;
-          if (addressEl) {
-            addressEl.value = fullAddress;
-            await geocodeAddress(fullAddress);
-          }
-        }
-      } catch (error) {
-        // Não mostra erro se falhar
-      }
-    }
-  });
-
-  // Monitora mudanças no campo de endereço
-  addressEl?.addEventListener('blur', async function() {
-    if (this.value.trim()) {
-      await updateMapFromAddress(this.value);
-    }
-  });
 
   // ÚNICA definição de newRequest
   function newRequest() {
@@ -543,14 +692,6 @@ document.addEventListener('DOMContentLoaded', () => {
            lat >= bounds.bottom && lat <= bounds.top;
   }
 
-  // NOVO: controle de requisições assíncronas
-  let reqCounter = 0;
-  function newRequest() {
-    const controller = new AbortController();
-    const id = ++reqCounter;
-    lastRequestId = id;
-    return { id, signal: controller.signal };
-  }
 
   // NOVO: wrappers de geolocalização
   async function getCurrentPositionWithTimeout(timeoutMs = 8000) {
@@ -667,12 +808,6 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       coordsEl.value = `${lat},${lng}`;
       
-      // Não faz nada se já tiver um endereço válido
-      const currentAddress = addressEl.value.trim();
-      if (currentAddress && currentAddress.includes(',')) {
-        return;
-      }
-
       // Tenta primeiro com zoom alto para precisão
       const nominatimUrl = `/radci/api/reverse.php?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1`;
       const response = await fetch(nominatimUrl);
@@ -749,13 +884,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Atualiza os campos
                 if (fullAddress.includes(',')) {
                   addressEl.value = fullAddress;
+
+                  // Preenche campos separados com preferência pelos dados do ViaCEP e fallback para Nominatim
+                  const bairroResolved = viacepData.bairro || address.suburb || address.neighbourhood || '';
+                  const cidadeResolved = viacepData.localidade || address.city || address.town || address.municipality || '';
+                  const ufResolved = viacepData.uf || (address.state_code || (address.state ? address.state.match(/[A-Z]{2}/)?.[0] || address.state : ''));
+
+                  if (bairroEl) bairroEl.value = bairroResolved;
+                  if (cidadeEl) cidadeEl.value = cidadeResolved;
+                  if (ufEl) ufEl.value = ufResolved;
                   
                   const cepField = document.getElementById('cep');
                   if (cepField) {
                     cepField.value = viacepData.cep || postcode.replace(/(\d{5})(\d{3})/, '$1-$2');
                   }
                   
-                  return;
+                  // não retorna aqui; permite que a lógica subsequente refine se necessário
                 }
               }
             }
@@ -775,6 +919,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Só atualiza se encontrou um endereço válido com vírgulas
         if (fullAddress.includes(',')) {
           addressEl.value = fullAddress;
+
+          if (bairroEl) bairroEl.value = address.suburb || address.neighbourhood || address.quarter || address.district || '';
+          if (cidadeEl) cidadeEl.value = address.city || address.town || address.village || address.municipality || '';
+          if (ufEl) ufEl.value = address.state_code || (address.state ? address.state.match(/[A-Z]{2}/)?.[0] || address.state : '');
           
           if (postcode?.length === 8) {
             const cepField = document.getElementById('cep');
@@ -1131,6 +1279,10 @@ document.addEventListener('DOMContentLoaded', () => {
   
       addressEl.value = `${rua}${bairro ? ', ' + bairro : ''} - ${cidade}, ${uf}`.trim();
       cepEl.value = formatCepDigits(cepDigits);
+
+      if (bairroEl) bairroEl.value = bairro;
+      if (cidadeEl) cidadeEl.value = cidade;
+      if (ufEl) ufEl.value = uf;
   
       // Limita pelo perímetro da cidade/UF
       const bounds = await getCityBounds(cidade, uf);
@@ -1218,10 +1370,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const left = (partsDash[0] || '').trim();
       const right = (partsDash[1] || '').trim();
 
-      // Rua e número
       const leftParts = left.split(',').map(s => s.trim()).filter(Boolean);
       const rua = leftParts[0] || '';
-      const numero = leftParts.length >= 2 ? leftParts[1] : '';
+      const numeroMatch = q.match(/\b\d+\b/);
+      const numero = numeroMatch ? numeroMatch[0] : '';
 
       // Bairro, Cidade, UF
       const rightParts = right.split(',').map(s => s.trim()).filter(Boolean);
@@ -1285,13 +1437,19 @@ document.addEventListener('DOMContentLoaded', () => {
         errorDiv.remove();
       }
       
-      // Busca o CEP da localização
+      // Busca CEP e demais dados da localização
       const reverseUrl = `/radci/api/reverse.php?lat=${lat}&lon=${lng}`;
       const reverseResponse = await fetch(reverseUrl, { signal });
       const reverseData = await reverseResponse.json();
-      
-      if (reverseData && reverseData.address && reverseData.address.postcode) {
-        cepEl.value = formatCepDigits(reverseData.address.postcode);
+
+      if (reverseData?.address) {
+        const a = reverseData.address;
+        // CEP
+        if (a.postcode) cepEl.value = formatCepDigits(a.postcode);
+        // Bairro/Cidade/UF
+        bairroEl && (bairroEl.value = a.suburb || a.neighbourhood || '');
+        cidadeEl && (cidadeEl.value = a.city || a.town || a.village || a.municipality || '');
+        ufEl && (ufEl.value = a.state_code || (a.state ? (a.state.match(/[A-Z]{2}/)?.[0] || a.state) : ''));
       }
       
       // Não mostra mensagem de erro se temos coordenadas válidas
@@ -1309,68 +1467,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Eventos CEP/Endereço (param o refino e reposicionam)
-  let cepTimer = null;
-  cepEl.addEventListener('input', (e) => {
-    const raw = e.target.value.replace(/\D/g,'');
-    e.target.value = formatCepDigits(raw);
-    
-    // Se tiver 8 dígitos, inicia a busca após um pequeno delay
-    if (raw.length === 8) {
-      if (cepTimer) clearTimeout(cepTimer);
-      cepTimer = setTimeout(async () => {
-        await fromCepInput(e.target.value);
-        lastCepFetchedDigits = raw;
-      }, 500);
-    }
-  });
-
-  cepEl.addEventListener('blur', async (e) => {
-    const digits = (e.target.value || '').replace(/\D/g,'');
-    if (digits.length === 8 && digits !== lastCepFetchedDigits) {
-      await fromCepInput(e.target.value);
-      lastCepFetchedDigits = digits;
-    }
-  });
-
-  cepEl.addEventListener('keydown', async (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const digits = (cepEl.value || '').replace(/\D/g,'');
-      if (digits.length === 8) {
-        await fromCepInput(cepEl.value);
-        lastCepFetchedDigits = digits;
-      }
-    }
-  });
-
-  let addrTimer = null;
-  addressEl.addEventListener('input', (e) => {
-    const q = e.target.value;
-    if (q.trim().length >= 5) {
-      if (addrTimer) clearTimeout(addrTimer);
-      addrTimer = setTimeout(async () => {
-        await fromAddressInput(q);
-      }, 500);
-    }
-  });
-
-  addressEl.addEventListener('blur', async (e) => {
-    const q = e.target.value;
-    if (q.trim().length >= 5) {
-      await fromAddressInput(q);
-    }
-  });
-
-  addressEl.addEventListener('keydown', async (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const q = e.target.value;
-      if (q.trim().length >= 5) {
-        await fromAddressInput(q);
-      }
-    }
-  });
 
   // Inicialização do mapa e localização
   (async function init() {
@@ -1510,6 +1606,7 @@ document.addEventListener('DOMContentLoaded', () => {
           Voltar
         </button>
       </form>
+      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-8">
     </div>
   </header>
 
@@ -1555,6 +1652,25 @@ document.addEventListener('DOMContentLoaded', () => {
         <div>
           <label for="cep" class="block text-sm font-medium text-gray-700">CEP</label>
           <input id="cep" name="cep" type="text" value="<?= htmlspecialchars($data['cep'] ?? '') ?>" class="mt-1 w-full rounded-md border-gray-300" placeholder="00000-000" />
+          <button type="button" id="toggleDetails" class="mt-2 text-sm text-green-700 hover:underline">Editar detalhes de endereço</button>
+          <div id="addressDetails" class="mt-2 grid grid-cols-1 md:grid-cols-4 gap-4 hidden">
+            <div>
+              <label for="bairro" class="block text-sm font-medium text-gray-700">Bairro</label>
+              <input id="bairro" name="bairro" type="text" value="<?= htmlspecialchars($data['bairro'] ?? '') ?>" class="mt-1 w-full rounded-md border-gray-300" />
+            </div>
+            <div>
+              <label for="complemento" class="block text-sm font-medium text-gray-700">Complemento</label>
+              <input id="complemento" name="complemento" type="text" value="<?= htmlspecialchars($data['complemento'] ?? '') ?>" class="mt-1 w-full rounded-md border-gray-300" />
+            </div>
+            <div>
+              <label for="cidade" class="block text-sm font-medium text-gray-700">Cidade/Município</label>
+              <input id="cidade" name="cidade" type="text" value="<?= htmlspecialchars($data['cidade'] ?? '') ?>" class="mt-1 w-full rounded-md border-gray-300" />
+            </div>
+            <div>
+              <label for="uf" class="block text-sm font-medium text-gray-700">UF</label>
+              <input id="uf" name="uf" type="text" value="<?= htmlspecialchars($data['uf'] ?? '') ?>" class="mt-1 w-full rounded-md border-gray-300" />
+            </div>
+          </div>
         </div>
 
 
@@ -1570,25 +1686,25 @@ document.addEventListener('DOMContentLoaded', () => {
           <input type="hidden" name="step" value="2" />
     
           <!-- Tipo de manifestação (radio visível com bolinha preenchida) -->
-          <?php $selectedType = $data['type'] ?? ''; ?>
+          <?php $selectedManifestacao = $data['manifestacao'] ?? ''; ?>
           <div>
             <p class="block text-sm font-medium text-gray-700 mb-2">Tipo de manifestação</p>
             <div class="space-y-3">
               <label class="flex items-center gap-3 px-3 py-2 border border-gray-300 rounded-lg cursor-pointer hover:border-green-400">
-                <input type="radio" name="type" value="Sugestão de Melhoria"
-                       class="accent-green-600 w-4 h-4" <?= $selectedType==='Sugestão de Melhoria'?'checked':'' ?> required>
+                <input type="radio" name="manifestacao" value="Sugestão de Melhoria"
+                       class="accent-green-600 w-4 h-4" <?= $selectedManifestacao==='Sugestão de Melhoria'?'checked':'' ?> required>
                 <span class="text-gray-900">Sugestão de Melhoria</span>
               </label>
     
               <label class="flex items-center gap-3 px-3 py-2 border border-gray-300 rounded-lg cursor-pointer hover:border-green-400">
-                <input type="radio" name="type" value="Reclamação"
-                       class="accent-green-600 w-4 h-4" <?= $selectedType==='Reclamação'?'checked':'' ?> required>
+                <input type="radio" name="manifestacao" value="Reclamação"
+                       class="accent-green-600 w-4 h-4" <?= $selectedManifestacao==='Reclamação'?'checked':'' ?> required>
                 <span class="text-gray-900">Reclamação</span>
               </label>
     
               <label class="flex items-center gap-3 px-3 py-2 border border-gray-300 rounded-lg cursor-pointer hover:border-green-400">
-                <input type="radio" name="type" value="Elogio"
-                       class="accent-green-600 w-4 h-4" <?= $selectedType==='Elogio'?'checked':'' ?> required>
+                <input type="radio" name="manifestacao" value="Elogio"
+                       class="accent-green-600 w-4 h-4" <?= $selectedManifestacao==='Elogio'?'checked':'' ?> required>
                 <span class="text-gray-900">Elogio</span>
               </label>
             </div>
@@ -1633,7 +1749,12 @@ document.addEventListener('DOMContentLoaded', () => {
         <div><strong>Endereço:</strong> <?= htmlspecialchars($data['address'] ?? '') ?></div>
         <div><strong>CEP:</strong> <?= htmlspecialchars($data['cep'] ?? '') ?></div>
         <div><strong>Tipo:</strong> <?= htmlspecialchars($data['type'] ?? '') ?></div>
-        <div><strong>Descrição:</strong> <?= nl2br(htmlspecialchars($data['description'] ?? '')) ?></div>
+        <div>
+          <strong>Descrição:</strong>
+          <span class="break-all whitespace-pre-wrap">
+            <?= nl2br(htmlspecialchars($data['description'] ?? '')) ?>
+          </span>
+        </div>
         <div><strong>Coordenadas:</strong> <?= implode(', ', array_map('number_format', $data['coordinates'] ?? [0,0], [6,6])) ?></div>
       </div>
 
