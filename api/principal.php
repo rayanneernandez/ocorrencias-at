@@ -8,6 +8,10 @@ if (isset($_GET['logout'])) {
     header("Location: principal.php");
     exit();
 }
+// Caminho absoluto com cache busting para a logo
+$logoFile = __DIR__ . '/../assets/images/logo.png';
+$logoVer  = file_exists($logoFile) ? filemtime($logoFile) : time();
+$logoSrc  = '/radci/assets/images/logo.png?v=' . $logoVer;
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -115,10 +119,11 @@ if (isset($_GET['logout'])) {
       <div class="grid lg:grid-cols-2 gap-12 items-center">
         
         <!-- Left -->
+        <!-- Left -->
         <div class="space-y-8 animate-fade-in">
           <div class="flex items-center space-x-3 mb-6">
             <div class="bg-white/10 p-3 rounded-xl border border-white/30">
-              <i data-lucide="map-pin" class="w-8 h-8 text-white"></i>
+              <img src="<?php echo $logoSrc; ?>" alt="RADCI" class="w-10 h-10">
             </div>
             <div>
               <h1 class="text-4xl lg:text-5xl font-bold">RADCI</h1>
@@ -293,7 +298,7 @@ if (isset($_GET['logout'])) {
       <div class="flex flex-col items-center space-y-6">
         <div class="flex items-center space-x-3">
           <div class="p-2 rounded-lg" style="background-color: var(--verde-principal);">
-            <i data-lucide="map-pin" class="w-6 h-6 text-white"></i>
+            <img src="<?php echo $logoSrc; ?>" alt="RADCI" class="w-6 h-6">
           </div>
           <div>
             <div class="text-xl font-bold text-gray-900">RADCI</div>
@@ -318,3 +323,6 @@ if (isset($_GET['logout'])) {
   </script>
 </body>
 </html>
+
+/
+

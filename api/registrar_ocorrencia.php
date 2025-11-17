@@ -1606,7 +1606,7 @@ document.addEventListener('DOMContentLoaded', () => {
           Voltar
         </button>
       </form>
-      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-8">
+      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-10">
     </div>
   </header>
 

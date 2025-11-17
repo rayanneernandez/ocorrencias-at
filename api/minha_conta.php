@@ -174,14 +174,21 @@ if (!empty($tokenGet)) {
 <title>Minha Conta | RADCI</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://unpkg.com/lucide@latest"></script>
-<style>:root{--primary:#065f46}</style>
+<style>:root{--primary:#065f46}
+    /* Fundo verde atrás da logo quando o header é branco */
+    header.bg-white .brand-logo-box { background-color: var(--primary); }
+    header:not(.bg-white) .brand-logo-box { background-color: transparent; }
+    </style>
 </head>
 <body class="min-h-screen bg-white text-gray-800">
 
 <header class="bg-white border-b py-4 shadow-sm">
   <div class="container mx-auto px-4 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="bg-[var(--primary)] text-white w-10 h-10 rounded flex items-center justify-center font-bold">R</div>
+      <!-- Logo dentro de quadrado verde, levemente maior -->
+      <div class="w-12 h-12 bg-[var(--primary)] flex items-center justify-center">
+        <img src="assets/images/logo.png" alt="RADCI" class="h-8 w-auto">
+      </div>
       <div>
         <h1 class="text-lg font-semibold text-[var(--primary)]">RADCI</h1>
         <p class="text-xs text-gray-500"><?= empty($tokenGet) ? 'Minha Conta' : 'Redefinição de senha' ?></p>
@@ -217,39 +224,48 @@ if (!empty($tokenGet)) {
 </div>
 <?php else: ?>
 <!-- Página Minha Conta -->
+
+<!-- Voltar no topo, mais visível -->
+<div class="flex items-center justify-between mb-4">
+    <a href="dashboard.php" class="inline-flex items-center text-green-700 hover:text-green-800 hover:underline font-medium">
+        <span aria-hidden="true">←</span>
+        <span class="ml-1">Voltar</span>
+    </a>
+</div>
+
 <div class="flex items-center gap-4 mb-6">
-<div class="w-14 h-14 rounded-full bg-[var(--primary)] flex items-center justify-center text-white text-lg font-bold">
-<?= strtoupper(substr($usuario['nome'] ?? 'U',0,1)) ?>
-</div>
-<div>
-<h2 class="text-lg font-bold text-[var(--primary)]">Olá, <?= htmlspecialchars($usuario['nome'] ?? 'Usuário') ?></h2>
-<p class="text-xs text-gray-500">Membro desde <?= date('Y', strtotime($usuario['created_at'])) ?></p>
-</div>
+    <div class="w-14 h-14 rounded-full bg-[var(--primary)] flex items-center justify-center text-white text-lg font-bold">
+        <?= strtoupper(substr($usuario['nome'] ?? 'U',0,1)) ?>
+    </div>
+    <div>
+        <h2 class="text-lg font-bold text-[var(--primary)]">Olá, <?= htmlspecialchars($usuario['nome'] ?? 'Usuário') ?></h2>
+        <p class="text-xs text-gray-500">Membro desde <?= date('Y', strtotime($usuario['created_at'])) ?></p>
+    </div>
 </div>
 
 <section class="bg-white rounded p-6 shadow mb-6">
-<h3 class="font-semibold mb-3">Informações da Conta</h3>
-<form method="POST" class="space-y-3">
-<input type="hidden" name="update_profile" value="1"/>
-<label class="block text-sm">Nome completo</label>
-<input type="text" name="nome" value="<?= htmlspecialchars($usuario['nome'] ?? '') ?>" class="w-full border p-2 rounded"/>
-<label class="block text-sm">E-mail</label>
-<input type="email" name="email" value="<?= htmlspecialchars($usuario['email'] ?? '') ?>" class="w-full border p-2 rounded"/>
-<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-<div><label class="block text-sm">CEP</label><input type="text" name="cep" value="<?= htmlspecialchars($usuario['cep'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
-<div><label class="block text-sm">Cidade (ex.: São Paulo - SP)</label><input type="text" name="cidade" value="<?= htmlspecialchars((($usuario['municipio'] ?? '') . ($usuario['uf'] ? ' - '.$usuario['uf'] : ''))) ?>" class="w-full border p-2 rounded"/></div>
-</div>
-<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-<div><label class="block text-sm">Bairro</label><input type="text" name="bairro" value="<?= htmlspecialchars($usuario['bairro'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
-<div><label class="block text-sm">Rua</label><input type="text" name="rua" value="<?= htmlspecialchars($usuario['rua'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
-</div>
-<label class="block text-sm">Complemento</label>
-<input type="text" name="complemento" value="<?= htmlspecialchars($usuario['complemento'] ?? '') ?>" class="w-full border p-2 rounded"/>
-<div class="flex gap-3 mt-3">
-<button type="submit" class="bg-[var(--primary)] text-white px-4 py-2 rounded">Salvar Alterações</button>
-<a href="dashboard.php" class="px-4 py-2 border rounded text-sm">Voltar</a>
-</div>
-</form>
+    <h3 class="font-semibold mb-3">Informações da Conta</h3>
+    <form method="POST" class="space-y-3">
+        <input type="hidden" name="update_profile" value="1"/>
+        <label class="block text-sm">Nome completo</label>
+        <input type="text" name="nome" value="<?= htmlspecialchars($usuario['nome'] ?? '') ?>" class="w-full border p-2 rounded"/>
+        <label class="block text-sm">E-mail</label>
+        <input type="email" name="email" value="<?= htmlspecialchars($usuario['email'] ?? '') ?>" class="w-full border p-2 rounded"/>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="block text-sm">CEP</label><input type="text" name="cep" value="<?= htmlspecialchars($usuario['cep'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
+        <div><label class="block text-sm">Cidade (ex.: São Paulo - SP)</label><input type="text" name="cidade" value="<?= htmlspecialchars((($usuario['municipio'] ?? '') . ($usuario['uf'] ? ' - '.$usuario['uf'] : ''))) ?>" class="w-full border p-2 rounded"/></div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="block text-sm">Bairro</label><input type="text" name="bairro" value="<?= htmlspecialchars($usuario['bairro'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
+        <div><label class="block text-sm">Rua</label><input type="text" name="rua" value="<?= htmlspecialchars($usuario['rua'] ?? '') ?>" class="w-full border p-2 rounded"/></div>
+        </div>
+        <label class="block text-sm">Complemento</label>
+        <input type="text" name="complemento" value="<?= htmlspecialchars($usuario['complemento'] ?? '') ?>" class="w-full border p-2 rounded"/>
+        <div class="flex gap-3 mt-3">
+            <button type="submit" class="bg-[var(--primary)] text-white px-4 py-2 rounded">Salvar Alterações</button>
+            <!-- Removido o botão Voltar daqui -->
+        </div>
+    </form>
 </section>
 
 <section class="bg-white rounded p-6 shadow mb-6">

@@ -209,7 +209,7 @@ try {
 <body class="bg-white min-h-screen">
   <header class="bg-green-700 text-white">
     <div class="container mx-auto px-6 py-4 flex items-center justify-between relative">
-      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-8 w-auto" />
+      <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-10 w-auto" />
       <nav class="hidden md:flex items-center gap-6">
         <a href="prefeito_inicio.php" class="hover:underline">Início</a>
         <a href="gestor_secretarios.php" class="hover:underline">Meus Secretários</a>

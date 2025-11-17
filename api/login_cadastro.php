@@ -466,7 +466,7 @@ input::placeholder,select::placeholder{color:#9ca3af}input:focus,select:focus{ou
 <div class="md:hidden">
 <div class="flex items-center justify-center mb-6 space-x-3">
 <div class="bg-green-500 rounded-xl w-16 h-16 flex items-center justify-center">
-<img src="/radci/assets/images/logo.png" alt="RADCI" class="w-10 h-10">
+<img src="/radci/assets/images/logo.png" alt="RADCI" class="w-12 h-12">
 </div>
 <div>
 <h1 class="text-2xl font-bold">RADCI</h1>

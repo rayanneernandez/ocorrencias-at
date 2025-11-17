@@ -154,39 +154,42 @@ class NotificacaoManager {
         }
     }
     
+    private function hasColumn($table, $column) {
+        try {
+            $stmt = $this->pdo->prepare("SHOW COLUMNS FROM {$table} LIKE ?");
+            $stmt->execute([$column]);
+            return $stmt->rowCount() > 0;
+        } catch (Throwable $_) {
+            return false;
+        }
+    }
+    
     public function marcarComoLida($notificacaoId, $usuarioId) {
-        $sql = "UPDATE notificacoes 
-                SET status = 'lida', data_leitura = CURRENT_TIMESTAMP 
-                WHERE id = ? AND usuario_id = ?";
+        $sql = "UPDATE notificacoes SET status = 'lida', data_leitura = CURRENT_TIMESTAMP WHERE id = ? AND usuario_id = ?";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([$notificacaoId, $usuarioId]);
-        
-        $sql = "SELECT 1 FROM notificacoes 
-                WHERE usuario_id = ? AND status = 'nao_lida' LIMIT 1";
+
+        $sql = "SELECT 1 FROM notificacoes WHERE usuario_id = ? AND status = 'nao_lida' LIMIT 1";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([$usuarioId]);
-        
+
         if (!$stmt->fetch()) {
             unset($_SESSION['has_unread_notifications']);
         }
     }
     
     public function buscarNotificacoesNaoLidas($usuarioId) {
-        $sql = "SELECT * FROM notificacoes 
-                WHERE usuario_id = ? AND status = 'nao_lida' 
-                ORDER BY data_criacao DESC";
+        $sql = "SELECT * FROM notificacoes WHERE usuario_id = ? AND status = 'nao_lida' ORDER BY data_criacao DESC";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([$usuarioId]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
     public function limparTodasNotificacoes($usuarioId) {
-        $sql = "UPDATE notificacoes 
-                SET status = 'lida', data_leitura = CURRENT_TIMESTAMP 
-                WHERE usuario_id = ? AND status = 'nao_lida'";
+        $sql = "UPDATE notificacoes SET status = 'lida', data_leitura = CURRENT_TIMESTAMP WHERE usuario_id = ? AND status = 'nao_lida'";
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute([$usuarioId]);
-        
+
         unset($_SESSION['has_unread_notifications']);
         return true;
     }

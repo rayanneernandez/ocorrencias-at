@@ -275,7 +275,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <!-- Header conforme perfil (menus iguais aos das telas principais) -->
     <header class="bg-green-700 text-white">
         <div class="container mx-auto px-6 py-4 flex items-center justify-between relative">
-            <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-8 w-auto" />
+            <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-10 w-auto" />
             <?php if ($perfilAtual === 10): ?>
                 <nav class="hidden md:flex items-center gap-6">
                     <a href="admin_inicio.php" class="hover:underline">Início</a>

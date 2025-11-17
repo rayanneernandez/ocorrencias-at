@@ -233,22 +233,23 @@ if ($userId) {
 
 // NOVO: montar pesquisas disponíveis a partir de 'pesquisa_meta' (preferencial) e 'pesquisa' (compatibilidade)
 try {
-  $usuarioMunicipio = null; $usuarioUF = null;
-  if ($userId > 0) {
-    $usrStmt = $pdo->prepare("SELECT municipio, UPPER(uf) AS uf FROM usuarios WHERE id = ?");
-    $usrStmt->execute([$userId]);
-    $usrRow = $usrStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-    $usuarioMunicipio = trim($usrRow['municipio'] ?? '');
-    $usuarioUF = strtoupper(trim($usrRow['uf'] ?? ''));
-  }
+    $usuarioMunicipio = null; $usuarioUF = null; $usuarioCriadoEm = null;
+    if ($userId > 0) {
+      $usrStmt = $pdo->prepare("SELECT municipio, UPPER(uf) AS uf, created_at FROM usuarios WHERE id = ?");
+      $usrStmt->execute([$userId]);
+      $usrRow = $usrStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+      $usuarioMunicipio = trim($usrRow['municipio'] ?? '');
+      $usuarioUF = strtoupper(trim($usrRow['uf'] ?? ''));
+      $usuarioCriadoEm = $usrRow['created_at'] ?? null;
+    }
 
-  // Listas separadas para controle fino
-  $availableSurveysMeta   = [];
-  $availableSurveysLegacy = [];
-  $availableSurveys       = $availableSurveys ?? [];
-  $availableSurveysCTA    = []; // apenas META, usado pelo card "Responder Agora"
+    // Listas separadas para controle fino
+    $availableSurveysMeta   = [];
+    $availableSurveysLegacy = [];
+    $availableSurveys       = $availableSurveys ?? [];
+    $availableSurveysCTA    = []; // apenas META, usado pelo card "Responder Agora"
 
-  $seenSid = [];
+    $seenSid = [];
 
   // Lista de SIDs já respondidos (DB + sessão)
   $answeredSids = [];
@@ -266,8 +267,8 @@ try {
   }
 
   // 1) Pesquisa META (canônica) — já exclui respondidas por ID
-  $metaSql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa_meta\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n       AND (\n         (cidade IS NULL OR cidade = '')\n         OR (cidade IS NOT NULL AND cidade <> '' AND (? = '' OR cidade = ?))\n       )\n       AND (\n         (uf IS NULL OR uf = '')\n         OR (uf IS NOT NULL AND uf <> '' AND (? = '' OR UPPER(uf) = ?))\n       )\n       AND id NOT IN (SELECT pesquisa_id FROM pesquisa_respostas WHERE usuario_id = ?)\n     ORDER BY id DESC\n     LIMIT 10\n  ";
-  $params = [$usuarioMunicipio, $usuarioMunicipio, $usuarioUF, $usuarioUF, $userId];
+  $metaSql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid, created_at\n      FROM pesquisa_meta\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n       AND (\n         (cidade IS NULL OR cidade = '')\n         OR (cidade IS NOT NULL AND cidade <> '' AND (? = '' OR cidade = ?))\n       )\n       AND (\n         (uf IS NULL OR uf = '')\n         OR (uf IS NOT NULL AND uf <> '' AND (? = '' OR UPPER(uf) = ?))\n       )\n       AND id NOT IN (SELECT pesquisa_id FROM pesquisa_respostas WHERE usuario_id = ?)\n       AND (? IS NULL OR created_at >= ?)\n     ORDER BY id DESC\n     LIMIT 10\n  ";
+  $params = [$usuarioMunicipio, $usuarioMunicipio, $usuarioUF, $usuarioUF, $userId, $usuarioCriadoEm, $usuarioCriadoEm];
   $mStmt = $pdo->prepare($metaSql);
   $mStmt->execute($params);
   $mRows = $mStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -296,26 +297,28 @@ try {
   }
 
   // 2) Compatibilidade: tabela 'pesquisa' (legado)
-  //    Apenas itens com SID não vazio e não respondidos; evita duplicar por SID.
-  $sql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n       AND (\n         (cidade IS NULL OR cidade = '')\n         OR (cidade IS NOT NULL AND cidade <> '' AND (? = '' OR cidade = ?))\n       )\n       AND (\n         (uf IS NULL OR uf = '')\n         OR (uf IS NOT NULL AND uf <> '' AND (? = '' OR UPPER(uf) = ?))\n       )\n     ORDER BY id DESC\n     LIMIT 10\n  ";
-  $params = [$usuarioMunicipio, $usuarioMunicipio, $usuarioUF, $usuarioUF];
-  $pStmt = $pdo->prepare($sql);
-  $pStmt->execute($params);
-  $pRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
+  //    Para usuários novos (com created_at), não exibimos itens da tabela legado.
+  if (empty($usuarioCriadoEm)) {
+    $sql = "\n    SELECT id AS db_id, titulo, descricao, tipo_destinatario, cidade, UPPER(uf) AS uf, sid\n      FROM pesquisa\n     WHERE tipo_destinatario IN ('todos','cidadaos')\n       AND (\n         (cidade IS NULL OR cidade = '')\n         OR (cidade IS NOT NULL AND cidade <> '' AND (? = '' OR cidade = ?))\n       )\n       AND (\n         (uf IS NULL OR uf = '')\n         OR (uf IS NOT NULL AND uf <> '' AND (? = '' OR UPPER(uf) = ?))\n       )\n     ORDER BY id DESC\n     LIMIT 10\n  ";
+    $params = [$usuarioMunicipio, $usuarioMunicipio, $usuarioUF, $usuarioUF];
+    $pStmt = $pdo->prepare($sql);
+    $pStmt->execute($params);
+    $pRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
 
-  foreach ($pRows as $r) {
-    $sid = trim($r['sid'] ?? '');
-    if ($sid === '') { continue; } // ignora legado sem SID
-    if (isset($answeredSids[strtolower($sid)])) { continue; } // já respondida
-    if (isset($seenSid[strtolower($sid)])) { continue; } // já temos via META
-    if (empty($r['titulo'])) { continue; } // ignora registros incompletos
+    foreach ($pRows as $r) {
+      $sid = trim($r['sid'] ?? '');
+      if ($sid === '') { continue; } // ignora legado sem SID
+      if (isset($answeredSids[strtolower($sid)])) { continue; } // já respondida
+      if (isset($seenSid[strtolower($sid)])) { continue; } // já temos via META
+      if (empty($r['titulo'])) { continue; } // ignora registros incompletos
 
-    $availableSurveysLegacy[] = [
-      'sid'         => $sid,
-      'db_id'       => intval($r['db_id']),
-      'title'       => $r['titulo'] ?? 'Pesquisa',
-      'description' => $r['descricao'] ?? ''
-    ];
+      $availableSurveysLegacy[] = [
+        'sid'         => $sid,
+        'db_id'       => intval($r['db_id']),
+        'title'       => $r['titulo'] ?? 'Pesquisa',
+        'description' => $r['descricao'] ?? ''
+      ];
+    }
   }
 
   // Consolida listas
@@ -1128,7 +1131,8 @@ if ($userId > 0) {
 
 <header class="bg-green-700 sticky top-0 z-30 shadow">
   <div class="px-4 py-3 flex items-center justify-between text-white">
-    <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-9 md:h-10 w-auto">
+    <!-- Troque o src abaixo para o seu arquivo padrão -->
+    <img src="/radci/assets/images/logo.png" alt="RADCI" class="h-10 md:h-12 w-auto">
     <div class="flex items-center gap-3">
       <button id="bellBtn" class="p-2 rounded hover:bg-white/20 relative" aria-label="Notificações">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -1834,6 +1838,9 @@ if ($userId > 0) {
     notificationModal.id = 'notificationModal';
     notificationModal.className = 'modal';
     notificationModal.style.display = 'block';
+
+    // Inicializa a flag de estado no cliente (persistida enquanto a página não recarregar)
+    window.notificationsCleared = window.notificationsCleared || false;
     
     // Verifica se é a primeira visita do dia
     <?php
@@ -1848,15 +1855,8 @@ if ($userId > 0) {
     let notificationsHTML = '';
     
     <?php
-    // Busca notificações não lidas do banco de dados
-    $notificacoesNaoLidas = [];
-    try {
-      $stmt = $pdo->prepare("SELECT * FROM notificacoes WHERE usuario_id = ? AND lida = 0 ORDER BY data_criacao DESC");
-      $stmt->execute([$userId]);
-      $notificacoesNaoLidas = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e) {
-      error_log("Erro ao buscar notificações: " . $e->getMessage());
-    }
+    // Usa notificações já carregadas pelo NotificacaoManager
+    $notificacoesNaoLidas = is_array($notificacoesNaoLidas ?? null) ? $notificacoesNaoLidas : [];
     
     // Verifica primeira visita do dia
     $last_visit = $_SESSION['last_visit'] ?? null;
@@ -1892,10 +1892,11 @@ if ($userId > 0) {
       </div>`;
     <?php
     unset($_SESSION['show_welcome']);
-    endif;
-    
-    // Adiciona notificações do banco
-    foreach ($notificacoesNaoLidas as $notif): ?>
+    endif; ?>
+
+    // Adiciona notificações do banco somente se não estiverem limpas no cliente
+    if (!window.notificationsCleared) {
+    <?php foreach ($notificacoesNaoLidas as $notif): ?>
     notificationsHTML += `
       <div class="notification-item" data-id="<?= $notif['id'] ?>">
         <div class="notification-icon <?= $notif['tipo'] ?>">
@@ -1926,6 +1927,7 @@ if ($userId > 0) {
         </div>
       </div>`;
     <?php endforeach; ?>
+    }
     
     // Adicionar notificações de pesquisas não respondidas
     <?php if (!$hasAnsweredPriorities): ?>
@@ -2108,20 +2110,25 @@ if ($userId > 0) {
   window.clearAllNotifications = function() {
     fetch('limpar_notificacoes.php', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: <?= $userId ?> })
     })
     .then(response => response.json())
     .then(data => {
       if (data.success) {
-        // Atualiza o contador de notificações
+        // Marca como limpas no cliente
+        window.notificationsCleared = true;
+
+        // Atualiza badge
         const badge = document.getElementById('bellBadge');
         if (badge) {
           badge.textContent = '0';
           badge.classList.add('hidden');
         }
+
+        // Remove itens visíveis do modal imediatamente
+        document.querySelectorAll('#notificationModal .notification-item').forEach(el => el.remove());
+
         // Fecha o modal
         closeNotificationModal();
       }
